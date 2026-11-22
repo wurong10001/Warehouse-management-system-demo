@@ -1,0 +1,23 @@
+# ────────────────────────────────────────────────────────────────
+# Cloudflare Pages 部署配置（可选，也可在控制台里填）
+#
+# 这个项目是纯静态站点：没有 SSR、没有 Functions、没有数据库连接。
+# 所以下面只声明构建命令与产物目录即可。
+# ────────────────────────────────────────────────────────────────
+
+# 构建命令：装依赖 → 打包
+[build]
+  command = "npm ci && npm run build"
+  destination_dir = "dist"
+
+# Node 版本（Vite 7 需要 Node 20+）
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA 兜底：本项目用的是 hash 路由（#/login），
+# 深链路天然不会打到服务器，因此这里不需要复杂的 rewrite 规则，
+# 仅把未知路径回落到 index.html 即可。
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
