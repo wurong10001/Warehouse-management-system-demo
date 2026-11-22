@@ -96,6 +96,27 @@ await test('侧边栏按权限过滤，库管看不到「用户与权限」', as
   assert.ok(!t.includes('用户与权限'), '不应出现无权限菜单')
 })
 
+await test('无权访问的菜单整组隐藏，不留空分组标题', async () => {
+  const side = document.querySelector('.side').textContent.replace(/\s+/g, ' ')
+  // w01 是库管：无基础数据菜单、无系统管理菜单
+  assert.ok(!side.includes('系统管理'), '空分组「系统管理」应整组隐藏')
+  assert.ok(!side.includes('基础数据'), '空分组「基础数据」应整组隐藏')
+  assert.ok(side.includes('仓储管理'), '有权限的分组应保留')
+  // 反过来，超管应能看到这两个分组
+  await auth.logout()
+  await auth.login('root', '123456')
+  await router.push('/')
+  await sleep(180)
+  const sideRoot = document.querySelector('.side').textContent.replace(/\s+/g, ' ')
+  assert.ok(sideRoot.includes('系统管理'), '超管应看到系统管理分组')
+  assert.ok(sideRoot.includes('基础数据'), '超管应看到基础数据分组')
+  // 复位为 w01 供后续用例
+  await auth.logout()
+  await auth.login('w01', '123456')
+  await router.push('/')
+  await sleep(150)
+})
+
 // ── 6. 列表页 ──────────────────────────────────────────────────────────
 console.log('\n列表页')
 await test('入库列表渲染单号与状态标签', async () => {

@@ -38,6 +38,18 @@ const moreItems = computed(() =>
   flat.filter((i) => !['dashboard', 'inbound', 'outbound', 'inventory'].includes(i.key) && auth.can(i.key))
 )
 
+/**
+ * 侧边栏可见菜单。
+ * 不能只过滤菜单项：原版在组标题上只判断 g.group 是否存在，
+ * 于是「系统管理」这类分组即使用户无权访问任何子项，标题仍会显示，
+ * 在侧边栏留下一个空分组。这里整组过滤。
+ */
+const visibleMenu = computed(() =>
+  MENU
+    .map((g) => ({ ...g, items: g.items.filter((i) => auth.can(i.key)) }))
+    .filter((g) => g.items.length > 0)
+)
+
 const isActive = (p) => route.path === p
 function pickBase(id) {
   auth.setBase(id)
@@ -57,10 +69,10 @@ async function logout() {
         <div class="brand-name">备件仓储管理</div>
       </div>
       <nav>
-        <template v-for="g in MENU" :key="g.group ?? '_top'">
+        <template v-for="g in visibleMenu" :key="g.group ?? '_top'">
           <div v-if="g.group" class="side-group">{{ g.group }}</div>
           <router-link
-            v-for="it in g.items.filter(i => auth.can(i.key))"
+            v-for="it in g.items"
             :key="it.key" :to="it.path"
             class="side-item"
             :class="{ on: isActive(it.path) }"
