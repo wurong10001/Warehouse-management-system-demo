@@ -4,10 +4,13 @@ import { api } from '../api'
 import { useAuth } from '../stores/auth'
 import { useMobile } from '../composables/useMobile'
 import { MENU } from '../config/menu'
+import SegmentedControl from '../components/SegmentedControl.vue'
 
 const auth = useAuth()
 const isMobile = useMobile()
 const isSuper = computed(() => auth.user?.roles?.includes('super'))
+const PERM_MODE_OPTS = [{ value: 'role', label: '按角色' }, { value: 'custom', label: '自定义' }]
+const ACTIVE_OPTS = [{ value: 'on', label: '启用' }, { value: 'off', label: '停用' }]
 
 const rows = ref([])
 const allRoles = ref([])
@@ -164,10 +167,11 @@ async function submit() {
           </div>
           <div class="field-row">
             <label>权限模式</label>
-            <div class="segmented">
-              <button :class="{ on: form.perm_mode !== 'custom' }" @click="form.perm_mode = 'role'">按角色</button>
-              <button :class="{ on: form.perm_mode === 'custom' }" @click="form.perm_mode = 'custom'">自定义</button>
-            </div>
+            <SegmentedControl
+              :model-value="form.perm_mode === 'custom' ? 'custom' : 'role'"
+              :options="PERM_MODE_OPTS"
+              @update:model-value="form.perm_mode = $event"
+            />
           </div>
           <div v-if="form.perm_mode !== 'custom'" class="field-row role-row">
             <label>角色</label>
@@ -194,10 +198,11 @@ async function submit() {
           </div>
           <div v-if="form.id" class="field-row">
             <label>状态</label>
-            <div class="segmented">
-              <button :class="{ on: form.active }" @click="form.active = true">启用</button>
-              <button :class="{ on: !form.active }" @click="form.active = false">停用</button>
-            </div>
+            <SegmentedControl
+              :model-value="form.active ? 'on' : 'off'"
+              :options="ACTIVE_OPTS"
+              @update:model-value="form.active = $event === 'on'"
+            />
           </div>
           <div class="field-row">
             <label>{{ form.id ? '重置密码' : '初始密码' }}</label>
@@ -237,7 +242,6 @@ async function submit() {
   border: 1px solid var(--hairline); background: transparent; cursor: pointer;
   font: inherit; font-size: 13px; color: var(--text-2);
   padding: 7px 13px; border-radius: var(--r-pill); min-height: 36px;
-  -webkit-tap-highlight-color: transparent;
   /* 弹簧过渡由 app.css 统一声明 */
 }
 .chip.on { background: rgba(0,113,227,0.08); border-color: transparent; color: var(--accent-link); font-weight: 600; }

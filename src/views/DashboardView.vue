@@ -3,6 +3,7 @@ import { ref, watch, onMounted } from 'vue'
 import { api } from '../api'
 import { useAuth } from '../stores/auth'
 import StatusTag from '../components/StatusTag.vue'
+import SegmentedControl from '../components/SegmentedControl.vue'
 
 const auth = useAuth()
 const data = ref(null)
@@ -13,6 +14,8 @@ const SEGS = [
   { k: 'outbound', label: '出库' }, { k: 'quality', label: '质检' },
   { k: 'stocktake', label: '盘点' }, { k: 'delivery', label: '配送' }
 ]
+/** 分段控件需要 { value, label } 结构 */
+const SEG_OPTS = SEGS.map((s) => ({ value: s.k, label: s.label }))
 
 async function load() {
   err.value = ''
@@ -50,9 +53,7 @@ const maxBase = () => Math.max(1, ...(data.value?.bases || []).map(b => b.qty))
           <div class="panel">
             <div class="panel-head">
               <h3>我的待办</h3>
-              <div class="segmented">
-                <button v-for="s in SEGS" :key="s.k" :class="{ on: seg === s.k }" @click="seg = s.k">{{ s.label }}</button>
-              </div>
+              <SegmentedControl :model-value="seg" :options="SEG_OPTS" @update:model-value="seg = $event" />
             </div>
             <div v-for="(t, i) in todos()" :key="i" class="panel-row">
               <div class="grow">

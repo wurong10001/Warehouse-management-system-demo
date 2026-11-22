@@ -6,6 +6,7 @@ import { useMobile } from '../composables/useMobile'
 import { statusInfo } from '../api/status'
 import DetailSheet from '../components/DetailSheet.vue'
 import DetailPanel from '../components/DetailPanel.vue'
+import SegmentedControl from '../components/SegmentedControl.vue'
 
 const auth = useAuth()
 const isMobile = useMobile()
@@ -50,6 +51,7 @@ const SEGS = [
   { k: '', label: '全部' }, { k: 'normal', label: '正常' },
   { k: 'frozen', label: '冻结' }, { k: 'pending_qc', label: '待检' }, { k: 'unqualified', label: '不合格' }
 ]
+const SEG_OPTS = SEGS.map((s) => ({ value: s.k, label: s.label }))
 const fmtTime = (s) => s ? new Date(s).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'
 </script>
 
@@ -73,9 +75,7 @@ const fmtTime = (s) => s ? new Date(s).toLocaleString('zh-CN', { month: '2-digit
       </div>
       <div class="f-row no-border">
         <span class="f-k">库存状态</span>
-        <div class="segmented">
-          <button v-for="s in SEGS" :key="s.k" :class="{ on: st === s.k }" @click="st = s.k">{{ s.label }}</button>
-        </div>
+        <SegmentedControl :model-value="st" :options="SEG_OPTS" @update:model-value="st = $event" />
       </div>
     </div>
 

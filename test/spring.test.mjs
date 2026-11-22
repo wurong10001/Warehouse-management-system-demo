@@ -76,8 +76,7 @@ const SPRING = /cubic-bezier\(0\.34,\s*1\.56,\s*0\.64,\s*1\)/
 
 console.log('\n药丸元素：圆角')
 for (const [sel, name] of [
-  ['.base-pill', '基地切换药丸'],
-  ['.segmented button', '分段控件按钮'],
+  ['.segmented button', '分段控件药丸'],
   ['.btn', '主按钮'],
   ['.tag', '状态标签']
 ]) {
@@ -90,8 +89,7 @@ for (const [sel, name] of [
 
 console.log('\n药丸元素：弹簧缓动')
 for (const [sel, name] of [
-  ['.base-pill', '基地切换药丸'],
-  ['.segmented button', '分段控件按钮'],
+  ['.segmented button', '分段控件药丸'],
   ['.btn', '主按钮']
 ]) {
   check(`${name} 按下/回弹使用过冲缓动`, () => {
@@ -106,10 +104,10 @@ for (const [sel, name] of [
 
 console.log('\n动效参数合理性')
 check('回弹时长为 0.46s（不拖沓也不生硬）', () => {
-  assert.match(cs('.base-pill').transition, /transform 0\.46s/)
+  assert.match(cs('.segmented button').transition, /transform 0\.46s/)
 })
 check('will-change 已声明以启用 GPU 合成', () => {
-  assert.equal(cs('.base-pill').willChange, 'transform')
+  assert.equal(cs('.segmented button').willChange, 'transform')
 })
 check('按下态使用更短的时长（110ms 量级）', () => {
   // :active 不发散匹配，改为在 CSS 文本层面确认
@@ -131,14 +129,13 @@ check('减弱动效时保留颜色过渡（不是一刀切）', () => {
   assert.match(block, /transition:\s*background 0\.15s linear/)
 })
 
-console.log('\n选中反馈动画')
-check('分段控件选中态有 pill-pop 弹跳', () => {
-  assert.match(globalCss, /\.segmented button\.on\s*\{[\s\S]*?pill-pop/)
-  assert.match(globalCss, /@keyframes pill-pop/)
-})
-check('关键帧含过冲（scale > 1）', () => {
-  const kf = globalCss.slice(globalCss.indexOf('@keyframes pill-pop'))
-  assert.match(kf, /scale\(1\.06\)/)
+console.log('\n选中反馈不与按压冲突')
+check('分段控件选中态不再叠加 scale 动画', () => {
+  // 滑动胶囊已承担选中反馈；若再给 .on 加 scale 动画，
+  // 会与弹簧按压的 transform 互相覆盖，按下时看不到缩放
+  assert.ok(!/pill-pop/.test(globalCss), 'pill-pop 应已移除')
+  const m = globalCss.match(/\.segmented button\.on\s*\{([^}]*)\}/)
+  if (m) assert.ok(!/animation/.test(m[1]), '选中态不应有 animation')
 })
 
 console.log(`\n${'─'.repeat(52)}`)

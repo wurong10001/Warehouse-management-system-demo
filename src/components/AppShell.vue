@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { MENU } from '../config/menu'
 import { useAuth } from '../stores/auth'
 import { useDragDismiss } from '../composables/useDragDismiss'
+import SegmentedControl from './SegmentedControl.vue'
 
 const auth = useAuth()
 const router = useRouter()
@@ -50,6 +51,8 @@ const visibleMenu = computed(() =>
     .filter((g) => g.items.length > 0)
 )
 
+const baseOpts = computed(() => auth.bases.map((b) => ({ value: b.id, label: b.name })))
+
 const isActive = (p) => route.path === p
 function pickBase(id) {
   auth.setBase(id)
@@ -84,11 +87,13 @@ async function logout() {
     <div class="main">
       <header class="topbar" :class="{ scrolled }">
         <div class="base-pick">
-          <button
-            v-for="b in auth.bases" :key="b.id"
-            class="base-pill" :class="{ on: auth.baseId === b.id }"
-            @click="pickBase(b.id)"
-          >{{ b.name }}</button>
+          <SegmentedControl
+            v-if="auth.bases.length"
+            variant="pills"
+            :model-value="auth.baseId ?? ''"
+            :options="baseOpts"
+            @update:model-value="pickBase"
+          />
         </div>
         <div class="spacer"></div>
         <span class="who">{{ auth.user?.name }}</span>
@@ -139,13 +144,12 @@ async function logout() {
         </div>
         <div class="sheet-base">
           <span class="sb-label">当前基地</span>
-          <div class="segmented">
-            <button
-              v-for="b in auth.bases" :key="b.id"
-              :class="{ on: auth.baseId === b.id }"
-              @click="pickBase(b.id)"
-            >{{ b.name }}</button>
-          </div>
+          <SegmentedControl
+            variant="pills"
+            :model-value="auth.baseId ?? ''"
+            :options="baseOpts"
+            @update:model-value="pickBase"
+          />
         </div>
         <div class="sheet-rows">
           <button v-for="it in moreItems" :key="it.key" class="sheet-item" @click="router.push(it.path)">
@@ -188,15 +192,7 @@ async function logout() {
 .side-item.on { background: rgba(0,113,227,0.08); color: var(--accent-link); font-weight: 600; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .spacer { flex: 1; }
-.base-pick { display: flex; gap: 6px; }
-.base-pill {
-  border: none; cursor: pointer; font: inherit; font-size: 13px;
-  padding: 7px 14px; border-radius: var(--r-pill);
-  background: transparent; color: var(--text-3);
-  -webkit-tap-highlight-color: transparent;
-  /* transform 与 color/background 的过渡由 app.css 的弹簧规则统一管理 */
-}
-.base-pill.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--sh-card); }
+.base-pick { display: flex; gap: 6px; min-width: 0; }
 .who { font-size: 13px; color: var(--text-2); }
 .content { flex: 1; padding: 32px 0 64px; }
 
@@ -206,7 +202,6 @@ async function logout() {
   flex: 1; min-height: 56px; border: none; background: none; cursor: pointer;
   font: inherit; font-size: 10px; color: var(--text-3);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  -webkit-tap-highlight-color: transparent;
   /* 弹簧过渡由 app.css 统一声明 */
 }
 .tab svg { width: 24px; height: 24px; }
