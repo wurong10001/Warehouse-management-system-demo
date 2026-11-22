@@ -1,23 +1,24 @@
 # ────────────────────────────────────────────────────────────────
-# Cloudflare Pages 部署配置（可选，也可在控制台里填）
+# Cloudflare 部署配置（Workers 静态资源模式）
 #
-# 这个项目是纯静态站点：没有 SSR、没有 Functions、没有数据库连接。
-# 所以下面只声明构建命令与产物目录即可。
+# 本项目是纯静态站点：没有 SSR、没有 Worker 脚本、没有数据库连接，
+# 只是把构建产物 dist/ 作为静态资源上传。
+#
+# 说明：Workers 项目与 Pages 项目配置语法不同。
+#   - Pages 项目用 `[build]` / `[[redirects]]`，部署命令是 pages deploy
+#   - Workers 项目用 `name` + `[assets]`，部署命令是 wrangler deploy（当前采用）
+# 如果把 Pages 的字段写在这里，wrangler deploy 会报
+#   "Unexpected fields found in build field" 与
+#   "Missing entry-point to Worker script or to assets directory"
 # ────────────────────────────────────────────────────────────────
 
-# 构建命令：装依赖 → 打包
-[build]
-  command = "npm ci && npm run build"
-  destination_dir = "dist"
+name = "warehouse-management-system-demo"
+compatibility_date = "2025-01-01"
 
-# Node 版本（Vite 7 需要 Node 20+）
-[build.environment]
-  NODE_VERSION = "20"
-
-# SPA 兜底：本项目用的是 hash 路由（#/login），
-# 深链路天然不会打到服务器，因此这里不需要复杂的 rewrite 规则，
-# 仅把未知路径回落到 index.html 即可。
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+# 把构建产物当静态资源托管。
+# single-page-application：未命中的路径自动回落到 index.html。
+# 本项目用的是 hash 路由（#/login），深链路本就不会打到服务器，
+# 这里设为 SPA 只是兜底，防止直接访问 /foo 时 404。
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"

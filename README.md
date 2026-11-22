@@ -34,49 +34,78 @@ npm run dev          # → http://127.0.0.1:5173
 > 数据改动会存进浏览器 `localStorage`。登录页底部有「重置演示数据」，
 > 随时一键还原初始状态 —— 面试演示时很实用。
 
-## 部署到 Cloudflare Pages
+## 部署到 Cloudflare Workers
 
-三种方式任选其一。
+仓库根目录的 `wrangler.toml` 已配置好 **Workers 静态资源模式**：
+没有 Worker 脚本，只是把 `dist/` 当作静态资源上传。
 
-**1. 控制台 Git 集成（推荐）**
+```toml
+name = "warehouse-management-system-demo"
+compatibility_date = "2025-01-01"
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
+```
+
+**方式一：Cloudflare 控制台 Git 集成（推荐）**
+
+在 Cloudflare Dashboard → Workers & Pages → 创建 → 连接 Git 仓库，
+选 `Warehouse-management-system-demo`，然后：
 
 | 配置项 | 值 |
 |---|---|
-| Framework preset | `Vite` |
 | Build command | `npm run build` |
-| Build output directory | `dist` |
-| Node version | `20`（或以上） |
+| Deploy command | `npx wrangler deploy` |
+| 根目录 | `/`（默认） |
 
-**2. Wrangler 命令行**
+推送到 `master` 后 Cloudflare 会自动构建并部署。
+
+**方式二：本地 Wrangler CLI**
 
 ```bash
+npm install
 npm run build
-npx wrangler pages deploy dist
+npx wrangler login      # 首次
+npx wrangler deploy
 ```
 
-**3. 直接拖拽**
+**方式三：GitHub Actions 手动触发**
 
-先 `npm run build`，再把 `dist/` 目录拖到 Cloudflare Pages 控制台的
-上传区域即可。
+`.github/workflows/deploy-cloudflare.yml` 已备好，需先在仓库
+Settings → Secrets and variables → Actions 配置：
 
-因为用的是 **hash 路由**（`#/login`），任何静态托管都不需要额外配置
-重写规则，GitHub Pages、Netlify、Vercel、对象存储同样适用。
-`public/_headers` 与 `public/_redirects` 已为 Cloudflare Pages 准备好缓存
-与兜底策略；`wrangler.toml` 供 CLI 部署使用。
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
 
-**4. GitHub Pages（仓库自带工作流，零配置）**
+然后在 Actions 页面手动运行。
 
-仓库已包含 `.github/workflows/deploy-github-pages.yml`：推到 `master`
-即自动跑测试、构建并发布，不需要任何 secrets。首次启用只需在
+> ⚠️ **常见报错备忘**：如果 `wrangler deploy` 报
+> `Missing entry-point to Worker script or to assets directory`，
+> 或提示 `Unexpected fields found in build field: destination_dir`，
+> 说明 `wrangler.toml` 里混入了 **Pages 项目**的语法（`[build]`、
+> `[[redirects]]`）。Pages 与 Workers 的配置不通用：本项目已按
+> Workers 语法配好，请勿改回 Pages 写法。
+
+---
+
+## 部署到 GitHub Pages（零配置）
+
+仓库包含 `.github/workflows/deploy-github-pages.yml`：推到 `master`
+即自动跑测试、构建并发布，**不需要任何 secrets**。首次启用只需在
 Settings → Pages → Source 选择 **GitHub Actions**。
 
-部署后线上地址形如
+线上地址形如
 `https://<用户名>.github.io/Warehouse-management-system-demo/`
 （工作流会自动把 `base` 设成仓库名，无需手动改配置）。
 
-> 另有 `.github/workflows/deploy-cloudflare-pages.yml`，为手动触发的
-> Cloudflare 部署；需要先在仓库 secrets 里配置 `CLOUDFLARE_API_TOKEN`
-> 与 `CLOUDFLARE_ACCOUNT_ID`，否则请用上面第 1~3 种方式。
+---
+
+其他静态托管（Netlify / Vercel / 对象存储）同样适用：执行
+`npm run build`，把 `dist/` 整个目录传上去即可。因为用的是
+**hash 路由**（`#/login`），不需要任何服务端重写规则。
+`public/_headers` 与 `public/_redirects` 会在构建后进入 `dist/`，
+Cloudflare 的 Workers 与 Pages 都会自动识别。
 
 ## 项目结构
 

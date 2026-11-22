@@ -1,15 +1,14 @@
-name: Deploy to Cloudflare Pages
+name: Deploy to Cloudflare Workers
 
-# 手动触发（workflow_dispatch）而不是 push 自动触发：
-# 仓库没有配置 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID 这两个 secrets 时，
-# 自动触发会在每次提交后报红。需要部署时手动运行即可。
+# 手动触发而不是 push 自动触发：
+# 仓库没有配置 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID 时，
+# 自动触发会在每次提交后报红。
+#
+# 注意：这是可选方案。如果你已经在 Cloudflare 控制台用 Git 集成
+# 连了这个仓库（Workers 预设），那 push 后 Cloudflare 会自己构建部署，
+# 这个工作流无需启用。
 on:
   workflow_dispatch:
-    inputs:
-      project_name:
-        description: 'Cloudflare Pages 项目名'
-        required: true
-        default: 'wms-demo'
 
 jobs:
   test:
@@ -52,9 +51,10 @@ jobs:
       - name: 构建
         run: npm run build
 
-      - name: 发布到 Cloudflare Pages
+      # wrangler.toml 已声明 name 与 [assets]，此处不再传目录参数
+      - name: 发布到 Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=${{ inputs.project_name }}
+          command: deploy
