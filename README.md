@@ -64,13 +64,27 @@ npx wrangler pages deploy dist
 `public/_headers` 与 `public/_redirects` 已为 Cloudflare Pages 准备好缓存
 与兜底策略；`wrangler.toml` 供 CLI 部署使用。
 
+**4. GitHub Pages（仓库自带工作流，零配置）**
+
+仓库已包含 `.github/workflows/deploy-github-pages.yml`：推到 `master`
+即自动跑测试、构建并发布，不需要任何 secrets。首次启用只需在
+Settings → Pages → Source 选择 **GitHub Actions**。
+
+部署后线上地址形如
+`https://<用户名>.github.io/Warehouse-management-system-demo/`
+（工作流会自动把 `base` 设成仓库名，无需手动改配置）。
+
+> 另有 `.github/workflows/deploy-cloudflare-pages.yml`，为手动触发的
+> Cloudflare 部署；需要先在仓库 secrets 里配置 `CLOUDFLARE_API_TOKEN`
+> 与 `CLOUDFLARE_ACCOUNT_ID`，否则请用上面第 1~3 种方式。
+
 ## 项目结构
 
 ```
-demo/
+.
 ├── src/
 │   ├── mock/                  ← 核心：把后端搬进浏览器
-│   │   ├── seed.js            初始数据（由 sql/02_seed.sql 平移，20 备件 / 13 用户 …）
+│   │   ├── seed.js            初始数据（由原项目 SQL 种子平移，20 备件 / 13 用户 …）
 │   │   ├── db.js              localStorage 持久化 + 事务回滚 + 自增主键
 │   │   ├── api.js             所有接口实现（登录、列表、详情、看板、用户管理）
 │   │   └── sha256.js          纯 JS 密码哈希（不依赖安全上下文）
@@ -84,7 +98,7 @@ demo/
 │   └── styles/                Apple Liquid Glass 设计 token
 └── test/
     ├── api.test.mjs           38 项接口层测试（鉴权、隔离、事务、数据完整性）
-    ├── e2e.test.mjs           17 项 DOM 端到端测试（真实挂载 Vue 应用）
+    ├── e2e.test.mjs           18 项 DOM 端到端测试（真实挂载 Vue 应用）
     ├── setup-dom.mjs          jsdom 环境垫片
     └── build-e2e.mjs          把应用打包成可在 Node 加载的 bundle
 ```
@@ -141,7 +155,7 @@ inbound: {
 
 ```bash
 npm test          # 38 项接口层测试
-npm run test:e2e  # 17 项 DOM 端到端测试（jsdom 真实挂载应用）
+npm run test:e2e  # 18 项 DOM 端到端测试（jsdom 真实挂载应用）
 npm run test:all  # 全部
 ```
 

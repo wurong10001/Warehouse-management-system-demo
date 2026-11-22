@@ -1,0 +1,58 @@
+name: Deploy to GitHub Pages
+
+# 这个工作流不需要任何 secrets：直接用仓库自带的 GITHUB_TOKEN，
+# 推到 master 就自动构建并发布 —— 简历里的在线 demo 链接最省事的做法。
+#
+# 首次启用需要在仓库 Settings → Pages → Source 选择 "GitHub Actions"。
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 运行测试
+        run: npm run test:all
+
+      - name: 构建（子路径部署）
+        # GitHub Pages 项目页地址是 https://<user>.github.io/<repo>/，
+        # 因此 base 必须带仓库名；vite 配置里默认是 './'，这里覆盖成绝对子路径。
+        run: npm run build -- --base=/${{ github.event.repository.name }}/
+
+      - name: 上传产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 发布
+        id: deployment
+        uses: actions/deploy-pages@v4
