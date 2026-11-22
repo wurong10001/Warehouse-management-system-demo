@@ -135,6 +135,7 @@ Pages 都会自动识别，用于设置缓存与安全响应头。
 └── test/
     ├── api.test.mjs           38 项接口层测试（鉴权、隔离、事务、数据完整性）
     ├── e2e.test.mjs           18 项 DOM 端到端测试（真实挂载 Vue 应用）
+    ├── spring.test.mjs        18 项药丸弹簧动效测试
     ├── setup-dom.mjs          jsdom 环境垫片
     └── build-e2e.mjs          把应用打包成可在 Node 加载的 bundle
 ```
@@ -178,7 +179,35 @@ inbound: {
 `file://` 直接打开、或非 HTTPS 环境下也能工作 —— `crypto.subtle`
 只在安全上下文可用。已用标准测试向量验证。
 
-**5. 顺手修掉原版的几个问题**
+**5. iOS 弹簧按压动效**
+
+药丸类元素（按钮、分段控件、基地切换、角色标签、权限 chip、移动端 Tab）
+带有一致的 iOS 风格弹性反馈。关键不在"加个 transition"，而在**按下与松手
+用两条相反的缓动**：
+
+```css
+/* 按下：110ms 的 ease-out，立即收缩，不能拖沓 */
+.btn:active { transform: scale(0.96); transition: transform 110ms ease-out; }
+
+/* 松手：460ms 过冲回弹，y=1.56 > 1 才会「越过原位再回来」 */
+.btn { transition: transform 460ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+```
+
+如果按下和松手共用同一条弹簧曲线，按下会显得慢半拍，失去原生手感。
+所有参数集中在 `src/styles/tokens.css`：
+
+| token | 值 | 用途 |
+|---|---|---|
+| `--ease-spring-back` | `cubic-bezier(0.34, 1.56, 0.64, 1)` | 药丸回弹（明显过冲） |
+| `--ease-spring-soft` | `cubic-bezier(0.22, 1.28, 0.36, 1)` | 小元素轻弹 |
+| `--dur-press` / `--dur-spring` | `110ms` / `460ms` | 按下要快，回弹可舒展 |
+| `--press-scale-sm/md` | `0.93` / `0.96` | 目标越小收缩越明显 |
+
+细节处理：移动端（≤820px）收缩加强到 `0.9`——小目标需要更明显的反馈；
+搜索框只做 `0.995` 的极轻反馈，避免输入时晃动；系统开启
+`prefers-reduced-motion` 时禁用全部位移与缩放，仅保留颜色过渡。
+
+**6. 顺手修掉原版的几个问题**
 
 | 原版问题 | 静态版处理 |
 |---|---|
@@ -192,6 +221,7 @@ inbound: {
 ```bash
 npm test          # 38 项接口层测试
 npm run test:e2e  # 18 项 DOM 端到端测试（jsdom 真实挂载应用）
+npm run test:spring  # 18 项弹簧动效测试（校验计算样式确为过冲缓动）
 npm run test:all  # 全部
 ```
 
