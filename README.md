@@ -129,13 +129,15 @@ Pages 都会自动识别，用于设置缓存与安全响应头。
 │   ├── router/index.js        路由（hash 模式）+ 登录守卫
 │   ├── stores/auth.js         Pinia 登录态
 │   ├── views/                 看板、列表、库存、用户管理、登录
-│   ├── components/            外壳、详情抽屉、状态标签、状态流程
+│   ├── components/            外壳、详情抽屉、状态标签、状态流程、滑动胶囊
 │   ├── composables/           移动端断点、下拉手势关闭
 │   └── styles/                Apple Liquid Glass 设计 token
 └── test/
     ├── api.test.mjs           38 项接口层测试（鉴权、隔离、事务、数据完整性）
     ├── e2e.test.mjs           18 项 DOM 端到端测试（真实挂载 Vue 应用）
-    ├── spring.test.mjs        18 项药丸弹簧动效测试
+    ├── spring.test.mjs        14 项弹簧动效测试
+    ├── segmented.test.mjs     17 项滑动胶囊测试
+    ├── touch.test.mjs         17 项移动端触摸行为测试
     ├── setup-dom.mjs          jsdom 环境垫片
     └── build-e2e.mjs          把应用打包成可在 Node 加载的 bundle
 ```
@@ -207,7 +209,44 @@ inbound: {
 搜索框只做 `0.995` 的极轻反馈，避免输入时晃动；系统开启
 `prefers-reduced-motion` 时禁用全部位移与缩放，仅保留颜色过渡。
 
-**6. 顺手修掉原版的几个问题**
+**6. iOS 滑动胶囊（segmented control）**
+
+iOS 的分段控件不是「每个选项各自切换背景」，而是**容器里只有一个浮起的
+白色胶囊**，在选中项之间滑动过去 —— 视觉上是「滑」而不是「闪」。实现见
+`src/components/SegmentedControl.vue`：
+
+```vue
+<span class="seg-thumb" :style="{ transform: `translateX(${left}px)`, width: `${w}px` }" />
+```
+
+要点：
+
+- 用 `translateX + width` 过渡，配合 `will-change` 走合成层，不触发布局
+- 首次测量时临时禁用过渡（`.no-anim`），否则胶囊会从左上角「飞」进来
+- `ResizeObserver` 监听容器尺寸，字体缩放或窗口变化后重新测量
+- 选中按钮自身背景设为透明，背景完全交给胶囊，避免两套高亮打架
+- `role="tablist"/"tab"` + `aria-selected`，胶囊 `aria-hidden`
+- `prefers-reduced-motion` 下直接跳位，不做滑动
+
+已覆盖 5 处：看板筛选、库存状态、顶栏基地切换、弹层基地切换、
+用户管理的权限模式与启用停用。顶栏用 `pills` 变体（容器透明）。
+
+**7. 移动端触摸行为统一配置**
+
+手机上点按钮闪蓝块、长按弹系统菜单，根因是 WebKit 默认行为。集中配置在
+`app.css` 顶部：
+
+| 属性 | 作用 | 注意 |
+|---|---|---|
+| `-webkit-tap-highlight-color` | 去掉点击蓝块 | **不可继承**，须在 html/body 与具体标签分别声明 |
+| `-webkit-touch-callout` | 去掉 iOS 长按菜单 | — |
+| `user-select` | 防长按选中导致闪烁 | **不要给 input/textarea/select**，否则无法选中文字 |
+| `:focus-visible` | 键盘焦点环 | 只对 `:focus:not(:focus-visible)` 去轮廓，别全局 `outline:none` |
+
+> 没有采用「`touchstart` 上 `preventDefault`」的做法：它会连带阻止滚动，
+> 并在多数浏览器里让 `click` 不再触发 —— 按钮会直接点不动。
+
+**8. 顺手修掉原版的几个问题**
 
 | 原版问题 | 静态版处理 |
 |---|---|
@@ -221,7 +260,9 @@ inbound: {
 ```bash
 npm test          # 38 项接口层测试
 npm run test:e2e  # 18 项 DOM 端到端测试（jsdom 真实挂载应用）
-npm run test:spring  # 18 项弹簧动效测试（校验计算样式确为过冲缓动）
+npm run test:spring     # 14 项弹簧动效测试
+npm run test:segmented  # 17 项滑动胶囊测试
+npm run test:touch      # 17 项移动端触摸行为测试
 npm run test:all  # 全部
 ```
 
