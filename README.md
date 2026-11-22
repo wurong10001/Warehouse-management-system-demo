@@ -104,8 +104,15 @@ Settings → Pages → Source 选择 **GitHub Actions**。
 其他静态托管（Netlify / Vercel / 对象存储）同样适用：执行
 `npm run build`，把 `dist/` 整个目录传上去即可。因为用的是
 **hash 路由**（`#/login`），不需要任何服务端重写规则。
-`public/_headers` 与 `public/_redirects` 会在构建后进入 `dist/`，
-Cloudflare 的 Workers 与 Pages 都会自动识别。
+`public/_headers` 会在构建后进入 `dist/`，Cloudflare 的 Workers 与
+Pages 都会自动识别，用于设置缓存与安全响应头。
+
+> ⚠️ **为什么没有 `_redirects`**：SPA 兜底已由 `wrangler.toml` 的
+> `not_found_handling = "single-page-application"` 原生实现。若再加一条
+> `/*  /index.html  200`，Cloudflare 会把 `/index.html` 规范化成 `/`，
+> 从而再次命中 `/*`，部署时被 API 拒绝并报
+> `Infinite loop detected in this rule ... [code: 100324]`。
+> **不要恢复这个文件。**
 
 ## 项目结构
 

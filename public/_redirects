@@ -1,2 +1,0 @@
-# SPA 兜底：任何未命中的路径都交给 index.html（hash 路由下很少触发）
-/*  /index.html  200
