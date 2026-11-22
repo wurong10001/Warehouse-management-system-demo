@@ -177,9 +177,14 @@ async function logout() {
 .side-item {
   display: block; padding: 9px 12px; margin: 1px 0;
   border-radius: var(--r-thumb); font-size: 14px; color: var(--text-2);
-  transition: background 0.15s var(--ease-out-quart), color 0.15s;
+  /* 侧边栏项是直角条目，不参与药丸选择器组，单独给一条更含蓄的弹簧 */
+  transition:
+    background 0.15s var(--ease-out-quart),
+    color 0.15s,
+    transform var(--dur-spring) var(--ease-spring-back);
 }
 .side-item:hover { background: var(--hover); color: var(--text); }
+.side-item:active { transform: scale(0.98); }
 .side-item.on { background: rgba(0,113,227,0.08); color: var(--accent-link); font-weight: 600; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .spacer { flex: 1; }
@@ -188,7 +193,8 @@ async function logout() {
   border: none; cursor: pointer; font: inherit; font-size: 13px;
   padding: 7px 14px; border-radius: var(--r-pill);
   background: transparent; color: var(--text-3);
-  transition: background 0.2s var(--ease-out-quart), color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+  /* transform 与 color/background 的过渡由 app.css 的弹簧规则统一管理 */
 }
 .base-pill.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--sh-card); }
 .who { font-size: 13px; color: var(--text-2); }
@@ -200,11 +206,11 @@ async function logout() {
   flex: 1; min-height: 56px; border: none; background: none; cursor: pointer;
   font: inherit; font-size: 10px; color: var(--text-3);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  transition: color 0.15s var(--ease-out-quart), transform 0.1s;
+  -webkit-tap-highlight-color: transparent;
+  /* 弹簧过渡由 app.css 统一声明 */
 }
 .tab svg { width: 24px; height: 24px; }
 .tab.on { color: var(--accent); }
-.tab:active { transform: scale(0.96); }
 
 .scrim { position: fixed; inset: 0; z-index: 65; background: rgba(0,0,0,0.32); }
 .sheet {

@@ -237,7 +237,8 @@ async function submit() {
   border: 1px solid var(--hairline); background: transparent; cursor: pointer;
   font: inherit; font-size: 13px; color: var(--text-2);
   padding: 7px 13px; border-radius: var(--r-pill); min-height: 36px;
-  transition: background 0.15s var(--ease-out-quart), color 0.15s, border-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+  /* 弹簧过渡由 app.css 统一声明 */
 }
 .chip.on { background: rgba(0,113,227,0.08); border-color: transparent; color: var(--accent-link); font-weight: 600; }
 .m-err { margin: 12px 22px 0; font-size: 13px; color: var(--heat); }

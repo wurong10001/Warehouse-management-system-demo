@@ -77,6 +77,133 @@ a { color: var(--accent-link); text-decoration: none; }
 .dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--live); animation: pulse-dot 2s infinite; }
 .dot-off  { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 
+/* ════════════════════════════════════════════════════════════════
+   iOS 弹簧按压反馈
+   ────────────────────────────────────────────────────────────────
+   iOS 的「弹性」不是单一动画，而是一对相反的缓动：
+     按下 → 快速收缩，用 ease-out（立即响应，不拖沓）
+     松手 → 过冲回弹，用带 y>1 的 cubic-bezier（越过原位再回来）
+   如果按下和松手都用同一条弹簧曲线，会觉得按下也「慢半拍」，
+   失去原生手感。所以下面用 :active 切换缓动。
+
+   只作用于「药丸类」可点击元素，不给整页加 transform，
+   避免移动端出现合成层过多导致的滚动卡顿。
+   ════════════════════════════════════════════════════════════════ */
+
+/* 所有药丸感的可交互元素共用：按下即缩、松手回弹 */
+.btn,
+.segmented button,
+.base-pill,
+.pick,
+.chip,
+.tab,
+.sheet-item,
+.list-row.click,
+.m-row.click,
+.search-pill {
+  /* 默认态（= 松手后的回弹） */
+  transition:
+    transform var(--dur-spring) var(--ease-spring-back),
+    background 0.2s var(--ease-out-quart),
+    box-shadow 0.2s var(--ease-out-quart),
+    color 0.15s var(--ease-out-quart);
+  will-change: transform;
+}
+
+/* 按下：用短促的 ease-out 立刻缩小 */
+.btn:active,
+.segmented button:active,
+.base-pill:active,
+.pick:active,
+.chip:active,
+.tab:active,
+.sheet-item:active,
+.list-row.click:active,
+.m-row.click:active {
+  transform: scale(var(--press-scale-sm));
+  transition:
+    transform var(--dur-press) var(--ease-out-quart),
+    background 0.15s var(--ease-out-quart),
+    box-shadow 0.15s var(--ease-out-quart);
+}
+
+/* 常规按钮比小药丸大一些，收缩幅度相应保守 */
+.btn:active { transform: scale(var(--press-scale-md)); }
+
+/* 搜索框是可聚焦输入区，只做极轻微反馈，避免输入时晃动 */
+.search-pill:active { transform: scale(0.995); }
+
+/* 底部分段控件里的「选中态」：切换时轻微弹一下，强化选中反馈 */
+.segmented button.on {
+  animation: pill-pop var(--dur-pop) var(--ease-spring-back);
+}
+
+/* 状态标签不是可点击元素，但出现在列表里频繁重绘，
+   给一个入场微弹，让数据刷新时不自觉得「活」一点 */
+.tag {
+  animation: pill-fade-in 0.32s var(--ease-spring-soft) both;
+}
+
+/* ── 关键帧 ── */
+@keyframes pill-pop {
+  0%   { transform: scale(1); }
+  38%  { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+
+@keyframes pill-fade-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* 移动端药丸通常更小，收缩略强才看得出反馈 */
+@media (max-width: 820px) {
+  .btn:active,
+  .segmented button:active,
+  .base-pill:active,
+  .pick:active,
+  .chip:active,
+  .tab:active,
+  .sheet-item:active,
+  .list-row.click:active,
+  .m-row.click:active {
+    transform: scale(0.9);
+  }
+}
+
+/* 尊重系统「减少动态效果」设置：只保留颜色变化，取消所有位移与缩放 */
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .segmented button,
+  .base-pill,
+  .pick,
+  .chip,
+  .tab,
+  .sheet-item,
+  .list-row.click,
+  .m-row.click,
+  .search-pill {
+    transition: background 0.15s linear, color 0.15s linear !important;
+    will-change: auto;
+  }
+  .btn:active,
+  .segmented button:active,
+  .base-pill:active,
+  .pick:active,
+  .chip:active,
+  .tab:active,
+  .sheet-item:active,
+  .list-row.click:active,
+  .m-row.click:active,
+  .search-pill:active {
+    transform: none !important;
+  }
+  .segmented button.on,
+  .tag {
+    animation: none !important;
+  }
+}
+
 /* ── 按钮 ── */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -84,9 +211,8 @@ a { color: var(--accent-link); text-decoration: none; }
   border: none; border-radius: var(--r-pill);
   font: inherit; font-size: 15px; font-weight: 500;
   cursor: pointer;
-  transition: transform 0.15s var(--ease-out-quart), background 0.2s, box-shadow 0.2s;
+  -webkit-tap-highlight-color: transparent;
 }
-.btn:active { transform: scale(0.97); }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover { background: #0077ed; }
 .btn-ghost { background: transparent; color: var(--accent-link); }
@@ -103,7 +229,8 @@ a { color: var(--accent-link); text-decoration: none; }
   border: none; background: transparent; cursor: pointer;
   font: inherit; font-size: 13px; color: var(--text-2);
   padding: 7px 14px; border-radius: var(--r-pill);
-  transition: background 0.2s var(--ease-out-quart), color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+  /* transition 由上方的 iOS 弹簧规则统一声明，此处不再覆盖 */
 }
 .segmented button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--sh-card); }
 

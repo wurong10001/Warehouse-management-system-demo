@@ -97,4 +97,19 @@ body {
 :root {
   --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);   /* enter: sheets/dialogs/popovers (~400ms) */
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1); /* small moves: hover, segmented slide (~200ms) */
+
+  /* ── iOS 弹簧反馈（药丸元素的按压/回弹） ──
+     控制点 y > 1 即为「过冲」，这是 iOS 手感的关键：
+     按下时迅速收缩，松手后越过原尺寸一点再回落，形成轻微弹性。 */
+  --ease-spring-back: cubic-bezier(0.34, 1.56, 0.64, 1);  /* 回弹：明显过冲，用于按钮/药丸 */
+  --ease-spring-soft: cubic-bezier(0.22, 1.28, 0.36, 1);  /* 轻弹：小元素、阴影跟随 */
+
+  /* 时长节奏：按下必须即时（>150ms 就会显得迟钝），回弹可以舒展 */
+  --dur-press:  110ms;
+  --dur-spring: 460ms;
+  --dur-pop:    340ms;
+
+  /* 按压缩放：命中目标越小，收缩越明显才越有「按到」的实感 */
+  --press-scale-sm: 0.93;  /* 药丸 / 标签 / 选项 */
+  --press-scale-md: 0.96;  /* 按钮 */
 }

@@ -27,6 +27,8 @@ await build({
     emptyOutDir: true,
     minify: false,
     cssCodeSplit: false,
+    // 把 SFC 的 scoped 样式也抽成文件，测试里注入它就能正确匹配 data-v-*
+    // （必须与 DOM 来自同一次构建，否则 scope 哈希对不上）
     lib: {
       entry: path.resolve(testDir, 'app.entry.mjs'),
       formats: ['es'],
