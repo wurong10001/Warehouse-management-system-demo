@@ -248,7 +248,9 @@ export function createSeedDatabase() {
     { id: 8, code: 'auditor', name: '审计员' },
     { id: 9, code: 'super', name: '超级管理员' },
     // 老板：只做最终审批（删除仓库等不可逆操作），不参与日常作业
-    { id: 10, code: 'boss', name: '老板' }
+    { id: 10, code: 'boss', name: '老板' },
+    // 总管：可看全部仓库数据、可做业务作业，但不能管理账号（与 super 区分）
+    { id: 11, code: 'chief', name: '总管' }
   ]
 
   const perm = (role_id, keys) => keys.map((menu_key) => ({ role_id, menu_key }))
@@ -264,7 +266,10 @@ export function createSeedDatabase() {
     ...perm(8, ['dashboard', 'basedata', 'parts', 'inbound', 'outbound', 'inventory', 'flow', 'delivery', 'quality', 'stocktake', 'device', 'system']),
     ...perm(9, ['dashboard', 'basedata', 'parts', 'inbound', 'outbound', 'inventory', 'flow', 'delivery', 'quality', 'stocktake', 'device', 'system', 'warehouse']),
     // 老板：看板 + 仓库管理（审批）+ 消息，不做明细作业
-    ...perm(10, ['dashboard', 'basedata', 'warehouse', 'inventory', 'flow'])
+    ...perm(10, ['dashboard', 'basedata', 'warehouse', 'inventory', 'flow']),
+    // 总管：全部业务菜单（含仓库管理），但故意不含 system（账号管理留超管）
+    ...perm(11, ['dashboard', 'basedata', 'parts', 'inbound', 'outbound', 'inventory',
+                 'flow', 'delivery', 'quality', 'stocktake', 'device', 'warehouse'])
   ]
 
   const U = (id, username, name, base_id, warehouse_id) => ({
@@ -286,7 +291,8 @@ export function createSeedDatabase() {
     U(11, 'w03', '何库管', 2, 4),
     U(12, 'q02', '冯质检', 2, 3),
     U(13, 'd02', '蒋配送', 2, null),
-    U(14, 'boss', '董事长', null, null)
+    U(14, 'boss', '董事长', null, null),
+    U(15, 'chief', '大总管', null, null)
   ]
 
   const sys_user_role = [
@@ -303,7 +309,8 @@ export function createSeedDatabase() {
     { user_id: 11, role_id: 1 },
     { user_id: 12, role_id: 3 },
     { user_id: 13, role_id: 2 },
-    { user_id: 14, role_id: 10 }
+    { user_id: 14, role_id: 10 },
+    { user_id: 15, role_id: 11 }
   ]
 
   // 用户级自定义菜单（sql/04_perm_custom.sql 建表，种子为空）

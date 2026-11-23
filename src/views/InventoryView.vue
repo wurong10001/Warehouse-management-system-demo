@@ -1,5 +1,6 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { useAuth } from '../stores/auth'
 import { useMobile } from '../composables/useMobile'
@@ -10,6 +11,17 @@ import SegmentedControl from '../components/SegmentedControl.vue'
 
 const auth = useAuth()
 const isMobile = useMobile()
+const route = useRoute()
+const router = useRouter()
+
+/** 看板「库存预警」下钻：low=1 只看低于安全库存的行 */
+const lowFilter = computed(() => String(route.query.low || ''))
+const hasFilter = computed(() => lowFilter.value === '1')
+function clearFilter() {
+  const q = { ...route.query }
+  delete q.low
+  router.replace({ path: route.path, query: q })
+}
 const detailOpen = ref(false)
 const detailData = ref(null)
 const detailTitle = ref('')
@@ -38,6 +50,7 @@ async function load() {
   if (q.value) qs.set('q', q.value)
   if (wh.value) qs.set('warehouse_id', wh.value)
   if (st.value) qs.set('status', st.value)
+  if (lowFilter.value) qs.set('low', lowFilter.value)
   try { rows.value = await api.list('inventory?' + qs.toString()) } catch (e) { err.value = e.message }
 }
 onMounted(async () => {
@@ -46,6 +59,8 @@ onMounted(async () => {
 })
 watch([q, wh, st], load)
 watch(() => auth.baseId, load)
+// 看板跳转只改 query，需单独监听
+watch(() => route.query.low, load)
 
 const SEGS = [
   { k: '', label: '全部' }, { k: 'normal', label: '正常' },
@@ -63,6 +78,13 @@ const fmtTime = (s) => s ? new Date(s).toLocaleString('zh-CN', { month: '2-digit
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
         <input v-model="q" placeholder="备件编码 / 名称" />
       </div>
+    </div>
+
+    <div v-if="hasFilter" class="filter-bar">
+      <span class="fb-icon">⏷</span>
+      <span class="fb-text">筛选中：<b>仅看库存预警</b></span>
+      <span class="fb-count">{{ rows.length }} 条</span>
+      <button class="fb-clear" @click="clearFilter">清除筛选</button>
     </div>
 
     <div class="panel filters">
@@ -147,6 +169,24 @@ const fmtTime = (s) => s ? new Date(s).toLocaleString('zh-CN', { month: '2-digit
 .heat { color: var(--heat); font-weight: 650; }
 .dim { color: var(--text-3); font-size: 13px; }
 .state { padding: 40px 22px; text-align: center; color: var(--text-3); font-size: 14px; }
+
+/* 筛选提示条 */
+.filter-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 18px; padding: 10px 16px;
+  border-radius: var(--r-card);
+  background: rgba(255,107,0,0.08);
+  font-size: 13px; color: var(--text-2);
+}
+.fb-icon { color: var(--heat); font-size: 12px; }
+.fb-text b { color: var(--heat); font-weight: 600; }
+.fb-count { color: var(--text-3); font-size: 12px; }
+.fb-clear {
+  margin-left: auto; border: none; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--accent-link);
+  padding: 4px 8px; border-radius: var(--r-pill);
+}
+.fb-clear:hover { background: rgba(0,113,227,0.08); }
 .list-row.click, .m-row.click { cursor: pointer; }
 .list-row.click:active, .m-row.click:active { background: var(--hover); }
 </style>

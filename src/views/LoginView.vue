@@ -14,6 +14,8 @@ const err = ref('')
 /** 演示账号快捷填充：覆盖每种角色的典型视角，方便面试官一键切换 */
 const DEMO_ACCOUNTS = [
   { username: 'root', label: '超管', hint: '全部基地 · 可管理账号' },
+  { username: 'chief', label: '总管', hint: '全部仓库数据 · 不能管账号' },
+  { username: 'boss', label: '老板', hint: '全部仓库 · 审批仓库增删' },
   { username: 'admin', label: '管理员', hint: '全菜单 · 跟随基地切换' },
   { username: 'w01', label: '库管', hint: '华东中央仓' },
   { username: 'q01', label: '质检', hint: '华东中央仓' },

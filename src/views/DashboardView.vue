@@ -46,16 +46,22 @@ function waited(iso) {
 const isOverdue = (iso) => !!iso && (Date.now() - new Date(iso).getTime()) > 24 * 3600000
 
 /** 指标卡下钻：点击跳到对应列表并带上筛选意图 */
+/**
+ * 指标卡下钻目标。
+ * 带上 status / low 筛选参数，让列表精确展示卡片对应的单据，
+ * 而不是跳过去看到全部已完成的单（用户会以为数字和列表对不上）。
+ */
 const METRIC_LINKS = {
-  pending_in: { path: '/inbound', label: '待入库' },
-  pending_out: { path: '/outbound', label: '待出库' },
-  pending_qc: { path: '/quality', label: '待质检' },
-  pending_delivery: { path: '/delivery', label: '待配送' },
-  stock_alerts: { path: '/inventory', label: '库存预警' }
+  pending_in: { path: '/inbound', query: { status: 'draft,pending_qc,qc_ing,pending_shelf' } },
+  pending_out: { path: '/outbound', query: { status: 'pending_review,pending_pick,pending_check' } },
+  pending_qc: { path: '/quality', query: { status: 'pending_qc,qc_ing' } },
+  pending_delivery: { path: '/delivery', query: { status: 'pending_review,pending_ship' } },
+  // 库存预警不是状态维度，用 low=1 标识"可用量低于安全库存"
+  stock_alerts: { path: '/inventory', query: { low: '1' } }
 }
 function drill(metric) {
   const target = METRIC_LINKS[metric]
-  if (target) router.push(target.path)
+  if (target) router.push({ path: target.path, query: target.query })
 }
 </script>
 

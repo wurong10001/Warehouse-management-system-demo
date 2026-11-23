@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { useAuth } from '../stores/auth'
 import { useMobile } from '../composables/useMobile'
@@ -93,6 +94,38 @@ async function openDetail(r) {
 
 const auth = useAuth()
 const isMobile = useMobile()
+const route = useRoute()
+const router = useRouter()
+
+/**
+ * URL 筛选参数（看板卡片下钻用）。
+ * status: 逗号分隔的状态集合；low=1 表示只看库存预警。
+ * 放在 URL 里而不是组件状态，好处是可直接分享、刷新后仍保持。
+ */
+const statusFilter = computed(() => String(route.query.status || ''))
+const lowFilter = computed(() => String(route.query.low || ''))
+const hasFilter = computed(() => !!statusFilter.value || lowFilter.value)
+
+/** 筛选项的可读名称（列表顶部展示，避免用户困惑"怎么只有几条"） */
+const FILTER_LABEL = {
+  draft: '草稿', pending_qc: '待质检', qc_ing: '质检中', pending_shelf: '待上架',
+  pending_review: '待审核', pending_pick: '待拣货', pending_check: '待复核',
+  pending_count: '待盘点', counting: '盘点中', pending_ship: '待发运',
+  completed: '已完成', cancelled: '已取消', rejected: '已驳回'
+}
+const filterText = computed(() => {
+  if (lowFilter.value === '1') return '仅看库存预警'
+  if (!statusFilter.value) return ''
+  return statusFilter.value.split(',').map((s) => FILTER_LABEL[s.trim()] || s).join(' / ')
+})
+
+/** 清除筛选：把 URL 上的筛选参数去掉 */
+function clearFilter() {
+  const q = { ...route.query }
+  delete q.status
+  delete q.low
+  router.replace({ path: route.path, query: q })
+}
 const rows = ref([])
 const q = ref('')
 const loading = ref(false)
@@ -101,13 +134,21 @@ const err = ref('')
 async function load() {
   loading.value = true; err.value = ''
   try {
-    rows.value = await api.list(props.kind, { q: q.value })
+    // 筛选参数拼进 kind 的 query 串（api.list 支持 'kind?a=b' 形式）
+    const qs = new URLSearchParams()
+    if (q.value) qs.set('q', q.value)
+    if (statusFilter.value) qs.set('status', statusFilter.value)
+    if (lowFilter.value) qs.set('low', lowFilter.value)
+    const kindWithQuery = qs.toString() ? `${props.kind}?${qs}` : props.kind
+    rows.value = await api.list(kindWithQuery)
   } catch (e) { err.value = e.message } finally { loading.value = false }
 }
 onMounted(load)
 watch(q, load)
 watch(() => auth.baseId, load)
 watch(() => props.kind, () => { q.value = ''; rows.value = []; load() })
+// 看板卡片跳转只改 query 不改 path，必须单独监听
+watch(() => [route.query.status, route.query.low], load)
 
 const fmtTime = (s) => s ? new Date(s).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'
 const gridStyle = () => ({ gridTemplateColumns: props.columns.map(c => c.w || '1fr').join(' ') })
@@ -142,6 +183,14 @@ function cell(row, col) {
           + 新增{{ entitySchema?.label || '' }}
         </button>
       </div>
+    </div>
+
+    <!-- 筛选中提示：从看板下钻后明确告知正在过滤，避免误以为数据丢了 -->
+    <div v-if="hasFilter" class="filter-bar">
+      <span class="fb-icon">⏷</span>
+      <span class="fb-text">筛选中：<b>{{ filterText }}</b></span>
+      <span class="fb-count">{{ rows.length }} 条</span>
+      <button class="fb-clear" @click="clearFilter">清除筛选</button>
     </div>
 
     <div class="panel section-gap">
@@ -242,6 +291,24 @@ function cell(row, col) {
 .list-row.click:active, .m-row.click:active { background: var(--hover); }
 
 .btn-add { min-height: 40px; font-size: 14px; white-space: nowrap; }
+
+/* 筛选提示条 */
+.filter-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 18px; padding: 10px 16px;
+  border-radius: var(--r-card);
+  background: rgba(0,113,227,0.06);
+  font-size: 13px; color: var(--text-2);
+}
+.fb-icon { color: var(--accent); font-size: 12px; }
+.fb-text b { color: var(--accent-link); font-weight: 600; }
+.fb-count { color: var(--text-3); font-size: 12px; }
+.fb-clear {
+  margin-left: auto; border: none; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--accent-link);
+  padding: 4px 8px; border-radius: var(--r-pill);
+}
+.fb-clear:hover { background: rgba(0,113,227,0.08); }
 
 /* 操作列 */
 .ops { display: flex; gap: 6px; justify-content: flex-end; }

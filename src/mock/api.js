@@ -199,6 +199,7 @@ const LIST_ROUTES = {
       }
     }),
     baseCol: '_base', whCol: '_wh',
+    filterDefs: [{ key: 'status', sql: 'status', multi: true, get: (r) => r.out.status }],
     search: (r, q) => like(r._no, q) || like(r._ref, q),
     sort: (a, b) => cmp(a._created, b._created, 'desc'),
     limit: 100
@@ -220,6 +221,7 @@ const LIST_ROUTES = {
       }
     }),
     baseCol: '_base', whCol: '_wh',
+    filterDefs: [{ key: 'status', sql: 'status', multi: true, get: (r) => r.out.status }],
     search: (r, q) => like(r._no, q) || like(r._dept, q),
     sort: (a, b) => cmp(a._created, b._created, 'desc'),
     limit: 100
@@ -239,6 +241,7 @@ const LIST_ROUTES = {
       }
     }),
     baseCol: '_base', whCol: '_wh',
+    filterDefs: [{ key: 'status', sql: 'status', multi: true, get: (r) => r.out.status }],
     search: (r, q) => like(r._no, q) || like(r._dept, q),
     sort: (a, b) => cmp(a._created, b._created, 'desc'),
     limit: 100
@@ -256,6 +259,7 @@ const LIST_ROUTES = {
       }
     }),
     baseCol: '_base', whCol: '_wh',
+    filterDefs: [{ key: 'status', sql: 'status', multi: true, get: (r) => r.out.status }],
     search: (r, q) => like(r._no, q) || like(r._fromNo, q),
     sort: (a, b) => cmp(a._created, b._created, 'desc'),
     limit: 100
@@ -270,6 +274,7 @@ const LIST_ROUTES = {
       }
     }),
     baseCol: '_base', whCol: '_wh',
+    filterDefs: [{ key: 'status', sql: 'status', multi: true, get: (r) => r.out.status }],
     search: (r, q) => like(r._no, q) || like(r._scope, q),
     sort: (a, b) => cmp(a._created, b._created, 'desc'),
     limit: 100
@@ -395,7 +400,10 @@ const LIST_ROUTES = {
     baseCol: '_base', whCol: '_wh',
     filterDefs: [
       { key: 'warehouse_id', get: (r) => r.filters.warehouse_id, numeric: true },
-      { key: 'status', get: (r) => r.filters.status }
+      { key: 'status', get: (r) => r.filters.status },
+      // low=1 → 只看库存预警（可用量低于安全库存且状态正常）。
+      // 这是看板「库存预警」卡片下钻用的，与 status 不同维度，故用 pred。
+      { key: 'low', pred: (r, v) => (v === '1' || v === 'true' ? r.out.low === true : true) }
     ],
     search: (r, q) => like(r._code, q) || like(r._name, q),
     // order by p.code, w.code —— 同一备件在不同仓库时按仓库编码稳定排序
@@ -412,6 +420,23 @@ function runList(cfg, { user, token, query = {}, baseId }) {
   for (const f of cfg.filterDefs || []) {
     const v = query[f.key]
     if (v === undefined || v === '' || v === null) continue
+
+    // ① 使用 pred 的自定义谓词（如"低库存"这种非等值条件）
+    if (typeof f.pred === 'function') {
+      rows = rows.filter((r) => f.pred(r, v))
+      continue
+    }
+
+    // ② 多值：status=待质检,质检中 → 逗号分隔取并集
+    if (f.multi) {
+      const wants = String(v).split(',').map((x) => x.trim()).filter(Boolean)
+      if (!wants.length) continue
+      const set = new Set(f.numeric ? wants.map(Number) : wants)
+      rows = rows.filter((r) => set.has(f.get(r)))
+      continue
+    }
+
+    // ③ 单值等值
     const want = f.numeric ? Number(v) : v
     rows = rows.filter((r) => f.get(r) === want)
   }
