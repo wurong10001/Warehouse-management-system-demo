@@ -10,12 +10,13 @@
     "preview": "vite preview --port 4173",
     "test": "node test/api.test.mjs",
     "test:e2e": "node test/build-e2e.mjs && node test/e2e.test.mjs",
-    "test:all": "node test/build-e2e.mjs && node test/api.test.mjs && node test/write.test.mjs && node test/governance.test.mjs && node test/e2e.test.mjs && node test/spring.test.mjs && node test/segmented.test.mjs && node test/touch.test.mjs",
+    "test:all": "node test/build-e2e.mjs && node test/api.test.mjs && node test/write.test.mjs && node test/governance.test.mjs && node test/dashboard-scope.test.mjs && node test/e2e.test.mjs && node test/spring.test.mjs && node test/segmented.test.mjs && node test/touch.test.mjs",
     "test:spring": "node test/build-e2e.mjs && node test/spring.test.mjs",
     "test:touch": "node test/build-e2e.mjs && node test/touch.test.mjs",
     "test:segmented": "node test/build-e2e.mjs && node test/segmented.test.mjs",
     "test:write": "node test/write.test.mjs",
-    "test:governance": "node test/governance.test.mjs"
+    "test:governance": "node test/governance.test.mjs",
+    "test:scope": "node test/dashboard-scope.test.mjs"
   },
   "keywords": [
     "wms",

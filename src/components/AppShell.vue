@@ -87,9 +87,16 @@ async function closeMessages() {
 }
 
 const isActive = (p) => route.path === p
+/**
+ * 切换基地。
+ *
+ * ⚠️ 这里**不能** router.push('/')：早期只有看板需要响应基地切换，
+ * 于是硬编码跳首页，导致用户在入库/库存等页面切基地时被强行弹回看板。
+ * 各视图已 watch(() => auth.baseId, load)，切完原地刷新即可。
+ */
 function pickBase(id) {
+  if (id === auth.baseId) return
   auth.setBase(id)
-  router.push('/')
 }
 async function logout() {
   await auth.logout()

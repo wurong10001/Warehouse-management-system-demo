@@ -723,74 +723,89 @@ export function dashboard({ token, baseId }) {
   const user = requireUser(token)
   const db = getDb()
 
-  const whScope = user.warehouse_id || null
-  const baseScope = whScope ? null : (user.base_id || Number(baseId) || null)
+  /**
+   * 看板的数据范围必须与列表接口用**同一套判定**。
+   *
+   * 原先这里手写了一套 inScope，只认 user.warehouse_id（主仓），
+   * 导致两个真实问题：
+   *   ① 授权多个仓库的账号，看板只统计主仓（与列表不一致）
+   *   ② 「各基地库存分布」只看 user.base_id，仓库级账号能看见
+   *      其他基地的库存量 —— 这是跨仓数据泄漏
+   *
+   * 现在统一走 allowedWarehouses() + 仓库归属判定：
+   *   有授权仓库 → 只统计这些仓库
+   *   无授权但有基地 → 统计该基地下的仓库
+   *   都没有 → 不限（super / boss / chief）
+   */
+  const whs = allowedWarehouses(db, user)                    // null=不限，[..]=指定仓库
+  const baseScope = user.base_id || Number(baseId) || null
 
-  /** 生成范围过滤谓词，对应后端 mcond() */
-  const inScope = (row, baseField, whField) => {
-    if (whScope) return row[whField] === whScope
-    if (baseScope) return row[baseField] === baseScope
+  /** 该仓库是否在范围内 */
+  const whOk = (wid) => {
+    if (wid == null) return true
+    if (whs) return whs.includes(wid)
+    if (baseScope) return db.warehouse.find((w) => w.id === wid)?.base_id === baseScope
     return true
   }
 
+  /** 单据类：按仓库列判定 */
+  const docOk = (row, whField) => whOk(row[whField])
+
   const metrics = {
-    pending_in: db.doc_in.filter((d) => ['draft', 'pending_qc', 'qc_ing', 'pending_shelf'].includes(d.status) && inScope(d, 'base_id', 'warehouse_id')).length,
-    pending_out: db.doc_out.filter((d) => ['pending_review', 'pending_pick', 'pending_check'].includes(d.status) && inScope(d, 'base_id', 'warehouse_id')).length,
-    pending_qc: db.quality.filter((t) => ['pending_qc', 'qc_ing'].includes(t.status) && inScope(t, 'base_id', 'warehouse_id')).length,
-    pending_delivery: db.delivery.filter((t) => ['pending_review', 'pending_ship'].includes(t.status) && inScope(t, 'from_base_id', 'from_wh_id')).length,
+    pending_in: db.doc_in.filter((d) => ['draft', 'pending_qc', 'qc_ing', 'pending_shelf'].includes(d.status) && docOk(d, 'warehouse_id')).length,
+    pending_out: db.doc_out.filter((d) => ['pending_review', 'pending_pick', 'pending_check'].includes(d.status) && docOk(d, 'warehouse_id')).length,
+    pending_qc: db.quality.filter((t) => ['pending_qc', 'qc_ing'].includes(t.status) && docOk(t, 'warehouse_id')).length,
+    pending_delivery: db.delivery.filter((t) => ['pending_review', 'pending_ship'].includes(t.status) && docOk(t, 'from_wh_id')).length,
     stock_alerts: db.inventory.filter((i) => {
       if (i.status !== 'normal') return false
       const p = db.part.find((x) => x.id === i.part_id)
-      return i.avail_qty < (p?.safe_stock ?? 0) && inScope(i, 'base_id', 'warehouse_id')
+      return i.avail_qty < (p?.safe_stock ?? 0) && whOk(i.warehouse_id)
     }).length
   }
 
   const byDesc = (field) => (a, b) => cmp(a[field], b[field], 'desc')
   const todos = [
-    ...db.doc_in.filter((d) => ['draft', 'pending_qc', 'qc_ing', 'pending_shelf'].includes(d.status) && inScope(d, 'base_id', 'warehouse_id'))
+    ...db.doc_in.filter((d) => ['draft', 'pending_qc', 'qc_ing', 'pending_shelf'].includes(d.status) && docOk(d, 'warehouse_id'))
       .sort(byDesc('created_at')).slice(0, 8)
       .map((d) => ({ kind: 'inbound', no: d.no, title: `入库 · ${d.ref_no || d.from_src}`, status: d.status, created_at: d.created_at })),
-    ...db.doc_out.filter((d) => ['pending_review', 'pending_pick', 'pending_check'].includes(d.status) && inScope(d, 'base_id', 'warehouse_id'))
+    ...db.doc_out.filter((d) => ['pending_review', 'pending_pick', 'pending_check'].includes(d.status) && docOk(d, 'warehouse_id'))
       .sort(byDesc('created_at')).slice(0, 8)
       .map((d) => ({ kind: 'outbound', no: d.no, title: `出库 · ${d.dept_name || d.type}`, status: d.status, created_at: d.created_at })),
-    ...db.quality.filter((t) => ['pending_qc', 'qc_ing'].includes(t.status) && inScope(t, 'base_id', 'warehouse_id'))
+    ...db.quality.filter((t) => ['pending_qc', 'qc_ing'].includes(t.status) && docOk(t, 'warehouse_id'))
       .sort(byDesc('created_at')).slice(0, 8)
       .map((t) => ({ kind: 'quality', no: t.no, title: `质检 · ${t.total} 件`, status: t.status, created_at: t.created_at })),
-    ...db.stocktake.filter((t) => ['pending_count', 'counting', 'pending_review'].includes(t.status) && inScope(t, 'base_id', 'warehouse_id'))
+    ...db.stocktake.filter((t) => ['pending_count', 'counting', 'pending_review'].includes(t.status) && docOk(t, 'warehouse_id'))
       .sort(byDesc('created_at')).slice(0, 8)
       .map((t) => ({ kind: 'stocktake', no: t.no, title: `盘点 · ${t.scope}`, status: t.status, created_at: t.created_at })),
-    ...db.delivery.filter((t) => ['pending_review', 'pending_ship', 'in_transit'].includes(t.status) && inScope(t, 'from_base_id', 'from_wh_id'))
+    ...db.delivery.filter((t) => ['pending_review', 'pending_ship', 'in_transit'].includes(t.status) && docOk(t, 'from_wh_id'))
       .sort(byDesc('created_at')).slice(0, 8)
       .map((t) => ({ kind: 'delivery', no: t.no, title: `配送 · ${t.to_dept || '基地间'}`, status: t.status, created_at: t.created_at }))
   ]
 
-  // 异常单据（原版此查询漏了范围过滤，这里补上，避免跨基地泄漏）
+  // 异常单据
   const alerts = []
   for (const dv of db.delivery) {
-    if (dv.status === 'exception' && inScope(dv, 'from_base_id', 'from_wh_id')) {
+    if (dv.status === 'exception' && docOk(dv, 'from_wh_id')) {
       alerts.push({ title: '配送异常', no: dv.no, reason: '配送超时', kind: 'delivery', id: dv.id })
     }
   }
   for (const t of db.quality) {
-    if (t.fail_qty > 0 && inScope(t, 'base_id', 'warehouse_id')) {
+    if (t.fail_qty > 0 && docOk(t, 'warehouse_id')) {
       alerts.push({ title: '质检不合格', no: t.no, reason: `${t.fail_qty} 件不合格`, kind: 'quality', id: t.id })
     }
   }
   for (const t of db.stocktake) {
-    if (t.status !== 'pending_review' || !inScope(t, 'base_id', 'warehouse_id')) continue
+    if (t.status !== 'pending_review' || !docOk(t, 'warehouse_id')) continue
     const diff = db.stocktake_item.filter((i) => i.doc_id === t.id).reduce((s, i) => s + (i.diff || 0), 0)
     alerts.push({ title: '盘点差异待审批', no: t.no, reason: `差异 ${diff} 件`, kind: 'stocktake', id: t.id })
   }
 
-  // 近 7 天出入库趋势
+  // 近 7 天出入库趋势（按仓库范围过滤）
   const since = Date.now() - 7 * 24 * 60 * 60 * 1000
   const buckets = new Map()
   for (const f of db.inventory_flow) {
-    const ts = new Date(f.ts).getTime()
-    if (ts <= since) continue
-    const wh = db.warehouse.find((x) => x.id === f.warehouse_id)
-    if (whScope && f.warehouse_id !== whScope) continue
-    if (!whScope && baseScope && wh?.base_id !== baseScope) continue
+    if (new Date(f.ts).getTime() <= since) continue
+    if (!whOk(f.warehouse_id)) continue
     const day = md(f.ts)
     const cur = buckets.get(day) || { day, in_qty: 0, out_qty: 0 }
     if (f.qty_change > 0) cur.in_qty += f.qty_change
@@ -799,18 +814,30 @@ export function dashboard({ token, baseId }) {
   }
   const trend = [...buckets.values()].sort((a, b) => a.day.localeCompare(b.day))
 
-  const bases = (user.base_id ? db.base.filter((b) => b.id === user.base_id) : db.base)
+  /**
+   * 各基地库存分布。
+   *
+   * ⚠️ 这里曾是跨仓泄漏点：只按 user.base_id 过滤基地，
+   * 再对该基地下**所有仓库**的库存求和，仓库级账号因此能看到
+   * 同基地其他仓库、甚至其他基地的数字。
+   * 现在按 whOk() 逐仓库累加，仓库级账号只会看到自己仓库的贡献。
+   */
+  const bases = db.base
+    .filter((b) => {
+      if (whs) return true // 有仓库授权时，基地行保留但数值只累加授权仓库
+      if (baseScope) return b.id === baseScope
+      return true
+    })
     .map((b) => ({
       name: b.name,
-      qty: db.inventory.filter((i) => i.base_id === b.id).reduce((s, i) => s + i.avail_qty, 0)
+      qty: db.inventory
+        .filter((i) => i.base_id === b.id && whOk(i.warehouse_id))
+        .reduce((s, i) => s + i.avail_qty, 0)
     }))
+    // 数值为 0 的基地对当前用户无意义，隐藏（避免暴露"某基地存在"）
+    .filter((b) => b.qty > 0 || !whs)
 
-  // 状态条显示的基地口径要与实际过滤口径一致：
-  //   用户绑定基地 → 该基地名
-  //   否则跟随顶栏 X-Base-Id → 该基地名
-  //   都没有 → null（前端显示「全部基地」）
-  // 曾经这里只处理 user.base_id，导致总部账号切换顶栏后，
-  // 数据已按选中基地过滤，但状态条仍显示「全部基地」——口径不一致。
+  // 状态条基地口径
   const effectiveBaseId = user.base_id || baseScope || null
   const baseName = effectiveBaseId
     ? (db.base.find((b) => b.id === effectiveBaseId)?.name ?? null)
