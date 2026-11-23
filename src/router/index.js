@@ -77,6 +77,7 @@ const router = createRouter({
           { k: 'type', label: '类型' }, { k: 'warehouse_name', label: '绑定仓库' },
           { k: 'online', label: '在线', dot: true }, { k: 'last_heartbeat', label: '最后心跳', time: true }
         ]),
+        { path: 'warehouse', name: 'warehouse', component: () => import('../views/WarehouseAdminView.vue') },
         { path: 'system', name: 'system', component: () => import('../views/UserAdminView.vue') },
         { path: 'inventory', name: 'inventory', component: InventoryView }
       ]

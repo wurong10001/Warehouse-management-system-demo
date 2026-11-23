@@ -246,7 +246,9 @@ export function createSeedDatabase() {
     { id: 6, code: 'accountant', name: '会计' },
     { id: 7, code: 'purchaser', name: '采购员' },
     { id: 8, code: 'auditor', name: '审计员' },
-    { id: 9, code: 'super', name: '超级管理员' }
+    { id: 9, code: 'super', name: '超级管理员' },
+    // 老板：只做最终审批（删除仓库等不可逆操作），不参与日常作业
+    { id: 10, code: 'boss', name: '老板' }
   ]
 
   const perm = (role_id, keys) => keys.map((menu_key) => ({ role_id, menu_key }))
@@ -260,7 +262,9 @@ export function createSeedDatabase() {
     ...perm(6, ['dashboard', 'parts', 'inventory', 'flow', 'delivery', 'quality', 'stocktake']),
     ...perm(7, ['dashboard', 'parts', 'inbound', 'inventory', 'flow']),
     ...perm(8, ['dashboard', 'basedata', 'parts', 'inbound', 'outbound', 'inventory', 'flow', 'delivery', 'quality', 'stocktake', 'device', 'system']),
-    ...perm(9, ['dashboard', 'basedata', 'parts', 'inbound', 'outbound', 'inventory', 'flow', 'delivery', 'quality', 'stocktake', 'device', 'system'])
+    ...perm(9, ['dashboard', 'basedata', 'parts', 'inbound', 'outbound', 'inventory', 'flow', 'delivery', 'quality', 'stocktake', 'device', 'system', 'warehouse']),
+    // 老板：看板 + 仓库管理（审批）+ 消息，不做明细作业
+    ...perm(10, ['dashboard', 'basedata', 'warehouse', 'inventory', 'flow'])
   ]
 
   const U = (id, username, name, base_id, warehouse_id) => ({
@@ -281,7 +285,8 @@ export function createSeedDatabase() {
     U(10, 's01', '沈审计', null, null),
     U(11, 'w03', '何库管', 2, 4),
     U(12, 'q02', '冯质检', 2, 3),
-    U(13, 'd02', '蒋配送', 2, null)
+    U(13, 'd02', '蒋配送', 2, null),
+    U(14, 'boss', '董事长', null, null)
   ]
 
   const sys_user_role = [
@@ -297,11 +302,35 @@ export function createSeedDatabase() {
     { user_id: 10, role_id: 8 },
     { user_id: 11, role_id: 1 },
     { user_id: 12, role_id: 3 },
-    { user_id: 13, role_id: 2 }
+    { user_id: 13, role_id: 2 },
+    { user_id: 14, role_id: 10 }
   ]
 
   // 用户级自定义菜单（sql/04_perm_custom.sql 建表，种子为空）
   const sys_user_permission = []
+
+  /**
+   * 多仓库授权：一个用户可以被授权管理多个仓库。
+   * 与 sys_user.warehouse_id（单一主仓）并存：
+   *   · warehouse_id 是「主仓」，用于默认归属与表单预填
+   *   · 本表是「授权范围」，决定能看到/操作哪些仓库
+   * 规则：若本表有记录，以本表为准；否则回落到 warehouse_id。
+   */
+  const sys_user_warehouse = []
+
+  /**
+   * 审批请求（如删除仓库）。
+   * 高危且不可逆的操作不直接执行，而是生成一条 pending 请求，
+   * 由 boss 角色确认后才真正执行 —— 这是"双人复核"的最小实现。
+   */
+  const sys_approval = []
+
+  /**
+   * 站内消息（红点提示）。
+   * 由业务事件产生：新建单据、入库完成、质检结果、审批请求/结果等。
+   * read_at 为空即未读，前端按未读数显示红点。
+   */
+  const sys_message = []
 
   const sys_log = [
     { id: 1, user_id: 2, action: 'login', detail: '登录系统（华东基地）', ts: ago(1 * DAY) },
@@ -335,6 +364,9 @@ export function createSeedDatabase() {
     sys_user_role,
     sys_permission,
     sys_user_permission,
+    sys_user_warehouse,
+    sys_approval,
+    sys_message,
     sys_log
   }
 }

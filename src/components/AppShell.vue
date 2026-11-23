@@ -3,8 +3,10 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MENU } from '../config/menu'
 import { useAuth } from '../stores/auth'
+import { api } from '../api'
 import { useDragDismiss } from '../composables/useDragDismiss'
 import SegmentedControl from './SegmentedControl.vue'
+import MessagePanel from './MessagePanel.vue'
 
 const auth = useAuth()
 const router = useRouter()
@@ -53,6 +55,37 @@ const visibleMenu = computed(() =>
 
 const baseOpts = computed(() => auth.bases.map((b) => ({ value: b.id, label: b.name })))
 
+// ── 消息红点 ──
+// 未读数在登录后拉取，并在每次路由切换时刷新（用户操作后回到列表即可看到新红点），
+// 另加 30s 轮询保证长时间停留也能感知新消息。
+const unread = ref(0)
+const msgOpen = ref(false)
+
+async function refreshUnread() {
+  if (!auth.loggedIn) return
+  try {
+    const r = await api.messages()
+    unread.value = r.unread
+  } catch { /* 未登录或后端不可用时静默 */ }
+}
+
+let pollTimer = null
+onMounted(() => {
+  refreshUnread()
+  pollTimer = setInterval(refreshUnread, 30000)
+})
+onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
+watch(() => route.fullPath, refreshUnread)
+watch(() => auth.loggedIn, (v) => { if (v) refreshUnread() })
+
+function openMessages() {
+  msgOpen.value = true
+}
+async function closeMessages() {
+  msgOpen.value = false
+  await refreshUnread()
+}
+
 const isActive = (p) => route.path === p
 function pickBase(id) {
   auth.setBase(id)
@@ -96,6 +129,15 @@ async function logout() {
           />
         </div>
         <div class="spacer"></div>
+        <button class="msg-btn" :aria-label="unread ? `${unread} 条未读消息` : '消息'" @click="openMessages">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+            <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+          </svg>
+          <!-- 红点：未读时为数字，超过 99 显示 99+ -->
+          <span v-if="unread > 0" class="dot-badge">{{ unread > 99 ? '99+' : unread }}</span>
+        </button>
         <span class="who">{{ auth.user?.name }}</span>
         <button class="btn btn-ghost logout-btn" @click="logout">退出</button>
       </header>
@@ -152,6 +194,10 @@ async function logout() {
           />
         </div>
         <div class="sheet-rows">
+          <button class="sheet-item msg-entry" @click="sheet = false; openMessages()">
+            消息
+            <span v-if="unread > 0" class="dot-badge inline">{{ unread > 99 ? '99+' : unread }}</span>
+          </button>
           <button v-for="it in moreItems" :key="it.key" class="sheet-item" @click="router.push(it.path)">
             {{ it.label }}
           </button>
@@ -159,6 +205,9 @@ async function logout() {
         </div>
       </div>
     </Transition>
+
+    <!-- 消息中心 -->
+    <MessagePanel :open="msgOpen" @close="closeMessages" />
   </div>
 </template>
 
@@ -194,6 +243,28 @@ async function logout() {
 .spacer { flex: 1; }
 .base-pick { display: flex; gap: 6px; min-width: 0; }
 .who { font-size: 13px; color: var(--text-2); }
+
+/* 消息铃铛 */
+.msg-btn {
+  position: relative;
+  width: 36px; height: 36px; border-radius: 50%; border: none; cursor: pointer;
+  background: transparent; color: var(--text-2);
+  display: grid; place-items: center;
+  transition: background 0.15s var(--ease-out-quart), transform var(--dur-spring) var(--ease-spring-back);
+}
+.msg-btn:hover { background: rgba(0,0,0,0.05); }
+.msg-btn:active { transform: scale(0.9); }
+
+/* 红点：数字徽标 */
+.dot-badge {
+  position: absolute; top: 2px; right: 2px;
+  min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--heat); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.dot-badge.inline { position: static; margin-left: auto; }
 .content { flex: 1; padding: 32px 0 64px; }
 
 /* 底部 Tab（默认隐藏，手机端显示） */

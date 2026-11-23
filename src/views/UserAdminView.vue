@@ -38,7 +38,7 @@ const whOptions = computed(() =>
 
 function openCreate() {
   modalErr.value = ''
-  form.value = { id: null, username: '', name: '', base_id: '', warehouse_id: '', role_ids: [], perm_mode: 'role', menu_keys: [], active: true, password: '' }
+  form.value = { id: null, username: '', name: '', base_id: '', warehouse_id: '', warehouse_ids: [], role_ids: [], perm_mode: 'role', menu_keys: [], active: true, password: '' }
   modal.value = true
 }
 function openEdit(r) {
@@ -47,6 +47,8 @@ function openEdit(r) {
     id: r.id, username: r.username, name: r.name,
     base_id: r.base_id ? String(r.base_id) : '',
     warehouse_id: r.warehouse_id ? String(r.warehouse_id) : '',
+    // 授权仓库（多选）：从接口返回的数组还原
+    warehouse_ids: Array.isArray(r.warehouse_ids) ? r.warehouse_ids.map(Number) : [],
     role_ids: [...(r.role_ids || [])],
     perm_mode: r.perm_mode === 'custom' ? 'custom' : 'role',
     menu_keys: [...(r.menu_keys || [])],
@@ -54,6 +56,11 @@ function openEdit(r) {
   }
   modal.value = true
 }
+function toggleWarehouse(id) {
+  const l = form.value.warehouse_ids || []
+  form.value.warehouse_ids = l.includes(id) ? l.filter((x) => x !== id) : [...l, id]
+}
+
 function toggleRole(id) {
   const l = form.value.role_ids
   form.value.role_ids = l.includes(id) ? l.filter((x) => x !== id) : [...l, id]
@@ -82,9 +89,12 @@ async function submit() {
     }
     if (f.id) {
       await api.updateUser(f.id, body)
+      // 授权仓库单独接口（涉及关联表，与用户主表更新分开更清晰）
+      await api.setUserWarehouses(f.id, f.warehouse_ids || [])
       if (f.password) await api.resetPassword(f.id, f.password)
     } else {
-      await api.createUser({ ...body, username: f.username.trim(), password: f.password })
+      const created = await api.createUser({ ...body, username: f.username.trim(), password: f.password })
+      if (created?.id) await api.setUserWarehouses(created.id, f.warehouse_ids || [])
     }
     modal.value = false
     load()
@@ -111,7 +121,12 @@ async function submit() {
             <span class="uname">{{ r.username }}</span>
             <span>{{ r.name }}</span>
             <span class="dim">{{ r.roles }}</span>
-            <span class="dim">{{ r.base_name }}<template v-if="r.warehouse_name !== '—'"> · {{ r.warehouse_name }}</template></span>
+            <span class="dim">
+              {{ r.base_name }}
+              <template v-if="r.warehouse_names?.length"> · {{ r.warehouse_names.join(' / ') }}</template>
+              <template v-else-if="r.warehouse_name !== '—'"> · {{ r.warehouse_name }}</template>
+              <template v-else> · 不限仓库</template>
+            </span>
             <span v-if="r.active" class="tag">启用</span>
             <span v-else class="tag attention">停用</span>
             <span class="act">
@@ -127,7 +142,9 @@ async function submit() {
             </div>
             <div class="m-line2">
               <span class="m-sec" data-label="角色">{{ r.roles }}</span>
-              <span class="m-sec" data-label="归属">{{ r.base_name }}{{ r.warehouse_name !== '—' ? ' · ' + r.warehouse_name : '' }}</span>
+              <span class="m-sec" data-label="归属">
+                {{ r.base_name }}<template v-if="r.warehouse_names?.length"> · {{ r.warehouse_names.join(' / ') }}</template>
+              </span>
             </div>
           </template>
         </div>
@@ -158,12 +175,20 @@ async function submit() {
               <option v-for="b in auth.bases" :key="b.id" :value="String(b.id)">{{ b.name }}</option>
             </select>
           </div>
-          <div class="field-row">
-            <label>所属仓库</label>
-            <select v-model="form.warehouse_id">
-              <option value="">不限仓库</option>
-              <option v-for="w in whOptions" :key="w.id" :value="String(w.id)">{{ w.name }}</option>
-            </select>
+          <div class="field-row warehouse-row">
+            <label>
+              授权仓库
+              <span class="hint-inline">可多选；不选=不限</span>
+            </label>
+            <div class="wh-chips">
+              <button
+                v-for="w in whOptions" :key="w.id"
+                type="button"
+                class="chip" :class="{ on: (form.warehouse_ids || []).includes(w.id) }"
+                @click="toggleWarehouse(w.id)"
+              >{{ w.name }}</button>
+              <span v-if="!whOptions.length" class="hint-inline">该基地下暂无仓库</span>
+            </div>
           </div>
           <div class="field-row">
             <label>权限模式</label>
@@ -245,6 +270,11 @@ async function submit() {
   /* 弹簧过渡由 app.css 统一声明 */
 }
 .chip.on { background: rgba(0,113,227,0.08); border-color: transparent; color: var(--accent-link); font-weight: 600; }
+
+/* 授权仓库多选行 */
+.warehouse-row { flex-wrap: wrap; }
+.wh-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; flex: 1; }
+.hint-inline { font-size: 11px; font-weight: 400; color: var(--text-4); margin-left: 6px; }
 .m-err { margin: 12px 22px 0; font-size: 13px; color: var(--heat); }
 .menu-perm { padding: 4px 22px 8px; border-bottom: 1px solid var(--hairline); }
 .mp-title { font-size: 14px; font-weight: 600; padding: 10px 0 2px; }

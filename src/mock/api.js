@@ -70,7 +70,16 @@ export function loadUser(id) {
       db.sys_permission.filter((p) => roleIds.includes(p.role_id)).map((p) => p.menu_key)
     )]
   }
-  return { id: u.id, username: u.username, name: u.name, base_id: u.base_id, warehouse_id: u.warehouse_id, perm_mode: u.perm_mode, roles, menus }
+  // 授权的仓库列表：前端据此决定能选哪些仓库、显示哪个仓库范围
+  const warehouses = allowedWarehouses(db, u)
+
+  return {
+    id: u.id, username: u.username, name: u.name,
+    base_id: u.base_id, warehouse_id: u.warehouse_id,
+    // warehouses 为 null 表示不限仓库（总部/超管/老板）
+    warehouses,
+    perm_mode: u.perm_mode, roles, menus
+  }
 }
 
 function basesFor(user) {
@@ -102,8 +111,31 @@ export class ApiError extends Error {
  * 绑定仓库 → 按仓库过滤；否则绑定基地 → 按基地过滤；
  * 都没有（总部账号）→ 跟随前端顶栏 X-Base-Id 上下文。
  */
-function scopeOf(user, ctxBaseId, baseCol, whCol) {
-  if (user.warehouse_id && whCol) return { field: whCol, val: user.warehouse_id }
+/**
+ * 用户被授权管理的仓库 id 列表。
+ *
+ * 优先级：
+ *   1. sys_user_warehouse 有记录 → 以其为准（可多个）
+ *   2. 否则回落到 sys_user.warehouse_id（单一主仓，兼容旧数据）
+ *   3. 都没有 → null（表示"不限仓库"，由基地维度约束或全局可见）
+ *
+ * 这样既支持「A 仓员工只管 A 仓」，也支持「一个人管多个仓」，
+ * 而不会破坏既有的单仓账号。
+ */
+function allowedWarehouses(db, user) {
+  const rows = (db.sys_user_warehouse || []).filter((r) => r.user_id === user.id)
+  if (rows.length) return rows.map((r) => r.warehouse_id)
+  return user.warehouse_id ? [user.warehouse_id] : null
+}
+
+/**
+ * 数据范围。
+ * 返回 { field, val } 或 { field, vals }（多值用 vals）。
+ * vals === null 表示该维度不受限。
+ */
+function scopeOf(user, ctxBaseId, baseCol, whCol, db) {
+  const whs = db ? allowedWarehouses(db, user) : (user.warehouse_id ? [user.warehouse_id] : null)
+  if (whs && whCol) return { field: whCol, vals: whs }
   const base = user.base_id || Number(ctxBaseId) || null
   if (base && baseCol) return { field: baseCol, val: base }
   return null
@@ -111,7 +143,19 @@ function scopeOf(user, ctxBaseId, baseCol, whCol) {
 
 function applyScope(rows, scope) {
   if (!scope) return rows
+  if (scope.vals) {
+    const set = new Set(scope.vals)
+    return rows.filter((r) => set.has(r[scope.field]))
+  }
   return rows.filter((r) => r[scope.field] === scope.val)
+}
+
+/** 单行是否在当前范围内（写入校验用） */
+function inScope(db, user, ctxBaseId, row, baseCol, whCol) {
+  const scope = scopeOf(user, ctxBaseId, baseCol, whCol, db)
+  if (!scope) return true
+  if (scope.vals) return scope.vals.includes(row[scope.field])
+  return row[scope.field] === scope.val
 }
 
 function writeLog(db, userId, action, detail) {
@@ -296,7 +340,15 @@ const LIST_ROUTES = {
           roles: roleNames.length ? roleNames.join(' / ') : (u.perm_mode === 'custom' ? '自定义' : '—'),
           role_ids: roleIds, menu_keys: menuKeys,
           base_name: b?.name || '全部基地',
-          warehouse_name: or(wh?.name)
+          warehouse_name: or(wh?.name),
+          // 授权仓库（多选）：用于用户管理页回填与展示
+          warehouse_ids: (db.sys_user_warehouse || [])
+            .filter((r) => r.user_id === u.id)
+            .map((r) => r.warehouse_id),
+          warehouse_names: (db.sys_user_warehouse || [])
+            .filter((r) => r.user_id === u.id)
+            .map((r) => db.warehouse.find((w) => w.id === r.warehouse_id)?.name)
+            .filter(Boolean)
         }
       }
     }),
@@ -368,7 +420,7 @@ function runList(cfg, { user, token, query = {}, baseId }) {
 
   const skipScope = cfg.allowAll && query.all === '1'
   if (!skipScope) {
-    const scope = scopeOf(user, baseId, cfg.baseCol, cfg.whCol)
+    const scope = scopeOf(user, baseId, cfg.baseCol, cfg.whCol, db)
     rows = applyScope(rows, scope)
   }
 
@@ -598,8 +650,12 @@ function runDetail(kind, id, { user, baseId }) {
   // 范围校验：命中不到行时等价于后端 `where id=$1 and <scope>` 查无结果。
   // 用原始行判定，避免投影后字段丢失。
   const raw = rawScopeOf(kind, db, id)
-  const scope = raw ? scopeOf(user, baseId, cfg.baseCol, cfg.whCol) : null
-  if (scope && raw[scope.field] !== scope.val) throw new ApiError(404, '不存在或无权查看')
+  const scope = raw ? scopeOf(user, baseId, cfg.baseCol, cfg.whCol, db) : null
+  // 多仓库授权时 scope 带 vals（数组），必须走 inScope 而不是比较 scope.val，
+  // 否则被授权多个仓库的账号会连自己仓库的数据都打不开（曾漏改此处导致 404）。
+  if (raw && !inScope(db, user, baseId, raw, cfg.baseCol, cfg.whCol)) {
+    throw new ApiError(404, '不存在或无权查看')
+  }
 
   const out = { header }
   if (cfg.items) out.items = cfg.items(db, id)
@@ -799,7 +855,7 @@ function scopedRowOr404(kind, db, id, user, baseId) {
   // 主数据若未配置范围列，则所有登录用户可改自己权限内的实体（权限已由 requireWrite 把关）
   if (!cols) return row
 
-  const scope = scopeOf(user, baseId, cols.base, cols.warehouse)
+  const scope = scopeOf(user, baseId, cols.base, cols.warehouse, db)
   if (scope && row[scope.field] !== scope.val) throw new ApiError(404, '不存在或无权查看')
   return row
 }
@@ -992,6 +1048,19 @@ export function create(kind, body, { token, baseId } = {}) {
     }
 
     writeLog(db, user.id, `${kind}.create`, `新建${schema.label} ${row.no || row.code || '#' + row.id}`)
+
+    // 业务事件 → 站内消息（红点）
+    if (schema.itemTable) {
+      const whId = row.warehouse_id ?? row.from_wh_id ?? null
+      pushMessage(db, {
+        type: `${kind}_created`,
+        title: `新${schema.label}`,
+        body: `${user.name} 新建${schema.label} ${row.no}`,
+        refDoc: row.no,
+        warehouseId: whId
+      })
+    }
+
     return { id: row.id, ...(row.no ? { no: row.no } : {}) }
   })
 }
@@ -1070,7 +1139,7 @@ export function options(kind, { token, baseId } = {}) {
     : db.base
   const warehouses = applyScope(
     db.warehouse.map((w) => ({ _base: w.base_id, _wh: w.id, out: { id: w.id, name: w.name, base_id: w.base_id, code: w.code } })),
-    scopeOf(user, baseId, '_base', '_wh')
+    scopeOf(user, baseId, '_base', '_wh', getDb())
   ).map((r) => r.out)
   const visibleWhIds = new Set(warehouses.map((w) => w.id))
   const locations = db.location
@@ -1120,6 +1189,45 @@ export function transition(kind, id, toStatus, payload = {}, { token, baseId } =
     row.updated_at = new Date().toISOString()
 
     writeLog(db, user.id, `${kind}.transition`, `${row.no || '#' + row.id} → ${toStatus}${posted ? '（已过账）' : ''}`)
+
+    // 业务事件 → 站内消息
+    const whId = row.warehouse_id ?? row.from_wh_id ?? null
+    if (kind === 'inbound' && toStatus === 'completed') {
+      pushMessage(db, {
+        type: 'inbound_completed', level: 'success',
+        title: '入库完成', body: `${row.no} 已入库过账`,
+        refDoc: row.no, warehouseId: whId
+      })
+    } else if (kind === 'quality' && (toStatus === 'completed' || toStatus === 'rejected')) {
+      const items = db.quality_item.filter((i) => i.doc_id === row.id)
+      const failQty = items.reduce((s, i) => s + (Number(i.fail_qty) || 0), 0)
+      pushMessage(db, {
+        type: 'quality_result',
+        level: failQty > 0 ? 'warn' : 'success',
+        title: failQty > 0 ? `质检不合格 ${failQty} 件` : '质检完成',
+        body: `${row.no} ${toStatus === 'rejected' ? '被驳回' : '质检完成'}${failQty > 0 ? `，${failQty} 件不合格` : ''}`,
+        refDoc: row.no, warehouseId: whId
+      })
+    } else if (kind === 'outbound' && toStatus === 'completed') {
+      pushMessage(db, {
+        type: 'outbound_completed', level: 'success',
+        title: '出库完成', body: `${row.no} 已出库过账`,
+        refDoc: row.no, warehouseId: whId
+      })
+    } else if (kind === 'stocktake' && toStatus === 'completed') {
+      pushMessage(db, {
+        type: 'stocktake_completed', level: 'success',
+        title: '盘点完成', body: `${row.no} 已按差异调整库存`,
+        refDoc: row.no, warehouseId: whId
+      })
+    } else if (kind === 'delivery' && toStatus === 'signed') {
+      pushMessage(db, {
+        type: 'delivery_signed', level: 'success',
+        title: '配送已签收', body: `${row.no} 已签收`,
+        refDoc: row.no, warehouseId: whId
+      })
+    }
+
     return { ok: true, posted }
   })
 }
@@ -1406,6 +1514,371 @@ export function resetPassword(token, id, password) {
     if (!u) throw new ApiError(404, '用户不存在')
     u.password_hash = sha256(password)
     writeLog(db, user.id, 'user.reset_pwd', `重置账号 #${id} 密码`)
+    return { ok: true }
+  })
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+//  站内消息（红点提示）
+//
+//  业务事件产生消息：新建单据、入库完成、质检结果、审批请求/结果。
+//  未读数由前端轮询或在操作后刷新，用于顶栏红点。
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * 推送一条消息。
+ *
+ * 收件人规则（避免消息轰炸）：
+ *   · 指定 targetUserIds → 只发给这些人
+ *   · 否则按「角色」推送：审批类给 boss，作业类给相关仓库的管理员+操作者
+ */
+function pushMessage(db, { type, title, body, refDoc, warehouseId, targetUserIds, level = 'info' }) {
+  const recipients = new Set()
+
+  if (targetUserIds?.length) {
+    for (const id of targetUserIds) recipients.add(id)
+  } else {
+    // 默认：同仓库的管理员 + 超管 + 老板（审批类）
+    for (const u of db.sys_user) {
+      if (!u.active) continue
+      const uRoles = db.sys_user_role.filter((r) => r.user_id === u.id).map((r) => r.role_id)
+      const codes = uRoles.map((rid) => db.sys_role.find((r) => r.id === rid)?.code).filter(Boolean)
+      const isBoss = codes.includes('boss')
+      const isAdmin = codes.includes('admin') || codes.includes('super')
+
+      if (type.startsWith('approval')) {
+        if (isBoss || isAdmin) recipients.add(u.id)
+        continue
+      }
+      // 业务消息：本仓库的人 + 管理员
+      if (isAdmin) { recipients.add(u.id); continue }
+      const whs = allowedWarehouses(db, u)
+      if (whs && warehouseId != null && whs.includes(warehouseId)) recipients.add(u.id)
+    }
+  }
+
+  const now = new Date().toISOString()
+  for (const uid of recipients) {
+    db.sys_message.push({
+      id: nextId(db, 'sys_message'),
+      user_id: uid,
+      type,
+      level,
+      title,
+      body: body || '',
+      ref_doc: refDoc || null,
+      warehouse_id: warehouseId ?? null,
+      read_at: null,
+      created_at: now
+    })
+  }
+  return recipients.size
+}
+
+/** 我的消息列表（含未读数） */
+export function messages({ token, baseId } = {}, { limit = 50 } = {}) {
+  const user = requireUser(token)
+  const db = getDb()
+  const mine = db.sys_message
+    .filter((m) => m.user_id === user.id)
+    .sort((a, b) => cmp(a.created_at, b.created_at, 'desc'))
+  return {
+    unread: mine.filter((m) => !m.read_at).length,
+    items: mine.slice(0, limit)
+  }
+}
+
+/** 标记已读：传 id 标记单条，不传则全部已读 */
+export function markMessagesRead({ token } = {}, id = null) {
+  const user = requireUser(token)
+  return withTransaction((db) => {
+    const now = new Date().toISOString()
+    let n = 0
+    for (const m of db.sys_message) {
+      if (m.user_id !== user.id || m.read_at) continue
+      if (id != null && m.id !== Number(id)) continue
+      m.read_at = now
+      n++
+    }
+    return { ok: true, marked: n }
+  })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  审批流（高危操作双人复核）
+//
+//  管理员发起 → 生成 pending 请求 → boss 确认后才真正执行。
+//  拒绝则请求标记 rejected，业务不受影响。
+//  这样"删除仓库"这种不可逆操作永远需要两个账号参与。
+// ══════════════════════════════════════════════════════════════════════
+
+const APPROVAL_ACTIONS = {
+  warehouse_delete: { label: '删除仓库', needRole: 'boss' },
+  warehouse_create: { label: '新增仓库', needRole: 'boss' }
+}
+
+/** 创建一个待审批请求 */
+function createApproval(db, { action, targetId, payload, requester, reason }) {
+  const id = nextId(db, 'sys_approval')
+  db.sys_approval.push({
+    id,
+    action,
+    target_id: targetId ?? null,
+    payload: payload || {},
+    status: 'pending',       // pending | approved | rejected
+    requester_id: requester.id,
+    requester_name: requester.name,
+    reason: reason || '',
+    decider_id: null,
+    decider_name: null,
+    decided_at: null,
+    created_at: new Date().toISOString()
+  })
+  return id
+}
+
+/**
+ * 发起删除仓库申请（管理员可用）。
+ *
+ * 不直接删除，而是进入审批。返回请求 id 供前端提示"已提交老板审批"。
+ */
+export function requestDeleteWarehouse({ token, baseId } = {}, id) {
+  const user = requireUser(token)
+  const db = getDb()
+  const wh = db.warehouse.find((w) => w.id === Number(id))
+  if (!wh) throw new ApiError(404, '仓库不存在')
+
+  // 只能对自己有权限的仓库发起
+  if (!inScope(db, user, baseId, wh, 'base_id', 'id')) {
+    throw new ApiError(404, '不存在或无权查看')
+  }
+  // 已有同类待审批请求时不重复提交
+  const dup = db.sys_approval.find(
+    (a) => a.action === 'warehouse_delete' && a.target_id === wh.id && a.status === 'pending'
+  )
+  if (dup) throw new ApiError(409, '该仓库已有待审批的删除申请')
+
+  return withTransaction((d) => {
+    const requestId = createApproval(d, {
+      action: 'warehouse_delete',
+      targetId: wh.id,
+      payload: { code: wh.code, name: wh.name, base_id: wh.base_id },
+      requester: user,
+      reason: `申请删除仓库「${wh.name}」`
+    })
+    pushMessage(d, {
+      type: 'approval_request',
+      level: 'warn',
+      title: '删除仓库待审批',
+      body: `${user.name} 申请删除仓库「${wh.name}」（${wh.code}）`,
+      refDoc: `APR-${requestId}`,
+      warehouseId: wh.id
+    })
+    writeLog(d, user.id, 'warehouse.delete_request', `申请删除仓库 ${wh.code}（审批 #${requestId}）`)
+    return { ok: true, requestId, status: 'pending' }
+  })
+}
+
+/**
+ * 发起新增仓库申请（管理员可用）。
+ * 新增本身风险低，但也走审批以保持"仓库结构变更必须老板知会"的一致性。
+ */
+export function requestCreateWarehouse({ token, baseId } = {}, body) {
+  const user = requireUser(token)
+  const db = getDb()
+  const schema = ENTITY_SCHEMA.warehouse
+  const { ok, errors } = validate('warehouse', body)
+  if (!ok) throw new ApiError(400, Object.values(errors)[0])
+  if (!canWrite(user, 'warehouse')) throw new ApiError(403, '当前角色无仓库管理权限')
+
+  // 编码唯一性提前校验，避免老板批准后才发现冲突
+  if (db.warehouse.some((w) => w.code === String(body.code).toUpperCase())) {
+    throw new ApiError(409, '仓库编码已存在')
+  }
+
+  return withTransaction((d) => {
+    const requestId = createApproval(d, {
+      action: 'warehouse_create',
+      targetId: null,
+      payload: {
+        base_id: Number(body.base_id),
+        code: String(body.code).toUpperCase(),
+        name: body.name,
+        address: body.address || null,
+        manager_id: body.manager_id ? Number(body.manager_id) : null
+      },
+      requester: user,
+      reason: `申请新增仓库「${body.name}」`
+    })
+    pushMessage(d, {
+      type: 'approval_request',
+      level: 'warn',
+      title: '新增仓库待审批',
+      body: `${user.name} 申请新增仓库「${body.name}」（${body.code}）`,
+      refDoc: `APR-${requestId}`
+    })
+    writeLog(d, user.id, 'warehouse.create_request', `申请新增仓库 ${body.code}（审批 #${requestId}）`)
+    return { ok: true, requestId, status: 'pending' }
+  })
+}
+
+/** 待我审批的列表（boss 看全部 pending） */
+export function approvals({ token } = {}, { status } = {}) {
+  const user = requireUser(token)
+  const db = getDb()
+  const isBoss = (user.roles || []).includes('boss')
+  const isAdmin = (user.roles || []).some((r) => ['admin', 'super'].includes(r))
+
+  let rows = db.sys_approval.slice()
+  if (status) rows = rows.filter((a) => a.status === status)
+  // 老板看全部；管理员只看自己发起的
+  if (!isBoss && !isAdmin) rows = []
+  else if (!isBoss) rows = rows.filter((a) => a.requester_id === user.id)
+
+  return rows
+    .sort((a, b) => cmp(a.created_at, b.created_at, 'desc'))
+    .map((a) => ({ ...a, action_label: APPROVAL_ACTIONS[a.action]?.label || a.action }))
+}
+
+/**
+ * 审批决定（仅 boss）。
+ * approve → 真正执行对应操作；reject → 只改状态。
+ */
+export function decideApproval({ token, baseId } = {}, id, decision, comment = '') {
+  const user = requireUser(token)
+  const db = getDb()
+  if (!(user.roles || []).includes('boss')) {
+    throw new ApiError(403, '仅老板可执行最终审批')
+  }
+
+  return withTransaction((d) => {
+    const a = d.sys_approval.find((x) => x.id === Number(id))
+    if (!a) throw new ApiError(404, '审批请求不存在')
+    if (a.status !== 'pending') throw new ApiError(409, '该请求已被处理')
+
+    if (decision === 'approve') {
+      if (a.action === 'warehouse_delete') {
+        const wh = d.warehouse.find((w) => w.id === a.target_id)
+        if (!wh) throw new ApiError(404, '仓库已不存在')
+        // 删除保护：有库位/库存/单据时拒绝，避免破坏历史数据
+        const hasLoc = (d.location || []).some((l) => l.warehouse_id === wh.id)
+        const hasInv = (d.inventory || []).some((i) => i.warehouse_id === wh.id)
+        if (hasLoc || hasInv) {
+          throw new ApiError(409, '该仓库下仍有库位或库存，无法删除')
+        }
+        d.warehouse = d.warehouse.filter((w) => w.id !== wh.id)
+        // 清理授权表中的悬空引用
+        d.sys_user_warehouse = (d.sys_user_warehouse || []).filter((r) => r.warehouse_id !== wh.id)
+        writeLog(d, user.id, 'warehouse.delete', `批准删除仓库 ${wh.code}`)
+      }
+
+      if (a.action === 'warehouse_create') {
+        const p = a.payload || {}
+        // 批准时才真正落库，且再校验一次编码唯一（可能已被别人占用）
+        if (d.warehouse.some((w) => w.code === p.code)) {
+          throw new ApiError(409, '仓库编码已存在，无法创建')
+        }
+        const newId = nextId(d, 'warehouse')
+        d.warehouse.push({
+          id: newId,
+          base_id: Number(p.base_id),
+          code: p.code,
+          name: p.name,
+          address: p.address || null,
+          manager_id: p.manager_id || null,
+          created_at: new Date().toISOString()
+        })
+        // 给申请人自动授权新仓库，便于其立即管理
+        if (!(d.sys_user_warehouse || []).some((r) => r.user_id === a.requester_id && r.warehouse_id === newId)) {
+          d.sys_user_warehouse = d.sys_user_warehouse || []
+          d.sys_user_warehouse.push({ user_id: a.requester_id, warehouse_id: newId })
+        }
+        writeLog(d, user.id, 'warehouse.create', `批准新增仓库 ${p.code}`)
+      }
+    }
+
+    a.status = decision === 'approve' ? 'approved' : 'rejected'
+    a.decider_id = user.id
+    a.decider_name = user.name
+    a.decided_at = new Date().toISOString()
+    a.comment = comment || ''
+
+    // 通知申请人结果
+    pushMessage(d, {
+      type: 'approval_result',
+      level: a.status === 'approved' ? 'success' : 'info',
+      title: a.status === 'approved' ? '审批已通过' : '审批被驳回',
+      body: `${user.name} ${a.status === 'approved' ? '批准' : '驳回'}了「${APPROVAL_ACTIONS[a.action]?.label || a.action}」请求${comment ? '：' + comment : ''}`,
+      refDoc: `APR-${a.id}`,
+      targetUserIds: [a.requester_id]
+    })
+
+    return { ok: true, status: a.status }
+  })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  仓库管理与用户仓库授权
+// ══════════════════════════════════════════════════════════════════════
+
+/** 仓库列表（管理页用，带统计与待审批状态） */
+export function warehouseList({ token, baseId } = {}) {
+  const user = requireUser(token)
+  const db = getDb()
+  const whs = allowedWarehouses(db, user)
+
+  let rows = db.warehouse.slice()
+  if (whs) rows = rows.filter((w) => whs.includes(w.id))
+
+  return rows
+    .sort((a, b) => cmp(a.id, b.id))
+    .map((w) => {
+      const base = db.base.find((b) => b.id === w.base_id)
+      const pending = db.sys_approval.find(
+        (a) => a.action === 'warehouse_delete' && a.target_id === w.id && a.status === 'pending'
+      )
+      return {
+        id: w.id,
+        code: w.code,
+        name: w.name,
+        base_id: w.base_id,
+        base_name: base?.name || '—',
+        address: or(w.address),
+        bin_count: db.location.filter((l) => l.warehouse_id === w.id && l.type === 'bin').length,
+        part_count: new Set(db.inventory.filter((i) => i.warehouse_id === w.id).map((i) => i.part_id)).size,
+        avail_qty: db.inventory.filter((i) => i.warehouse_id === w.id).reduce((s, i) => s + i.avail_qty, 0),
+        deletable: !db.location.some((l) => l.warehouse_id === w.id) &&
+                   !db.inventory.some((i) => i.warehouse_id === w.id),
+        pending_approval: pending ? { id: pending.id, by: pending.requester_name } : null
+      }
+    })
+}
+
+/**
+ * 设置用户的授权仓库（仅超管）。
+ * @param ids 仓库 id 数组；传 null/空数组表示「不限仓库」
+ */
+export function setUserWarehouses({ token } = {}, userId, ids) {
+  const user = requireUser(token)
+  requireSuper(user)
+  return withTransaction((db) => {
+    const target = db.sys_user.find((u) => u.id === Number(userId))
+    if (!target) throw new ApiError(404, '用户不存在')
+
+    db.sys_user_warehouse = (db.sys_user_warehouse || []).filter((r) => r.user_id !== target.id)
+    if (Array.isArray(ids) && ids.length) {
+      for (const wid of ids) {
+        if (!db.warehouse.some((w) => w.id === Number(wid))) continue
+        db.sys_user_warehouse.push({ user_id: target.id, warehouse_id: Number(wid) })
+      }
+      // 同步主仓为第一个，作为默认归属
+      target.warehouse_id = Number(ids[0])
+    } else {
+      // 清空授权 → 回落到不限仓库
+      target.warehouse_id = null
+    }
+    writeLog(db, user.id, 'user.warehouses', `设置账号 #${target.id} 授权仓库`)
     return { ok: true }
   })
 }

@@ -28,7 +28,10 @@ export const MENU = [
   { group: '质检管理', items: [{ key: 'quality', label: '质检单', path: '/quality' }] },
   { group: '盘点管理', items: [{ key: 'stocktake', label: '盘点任务', path: '/stocktake' }] },
   { group: '设备集成', items: [{ key: 'device', label: '设备状态', path: '/device' }] },
-  { group: '系统管理', items: [{ key: 'system', label: '用户与权限', path: '/system' }] }
+  { group: '系统管理', items: [
+    { key: 'warehouse', label: '仓库管理', path: '/warehouse' },
+    { key: 'system', label: '用户与权限', path: '/system' }
+  ] }
 ]
 
 /** 扁平化后的全部菜单项 */

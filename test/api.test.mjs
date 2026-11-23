@@ -320,7 +320,8 @@ section('持久化与事务')
 await test('重置数据后回到种子状态', async () => {
   resetDb()
   const db = getDb()
-  assert.equal(db.sys_user.length, 13)
+  // 14 = 原 13 个演示账号 + 老板 boss（新增审批角色）
+  assert.equal(db.sys_user.length, 14)
   assert.equal(db.part.length, 20)
   assert.equal(db.inventory.length, 19)
   assert.equal(db.sys_user_permission.length, 0)

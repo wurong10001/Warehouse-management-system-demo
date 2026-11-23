@@ -148,6 +148,54 @@ export const api = {
   resetPassword: async (id, password) =>
     call(() => mock.resetPassword(getToken(), Number(id), password)),
 
+  // ── 仓库管理与审批 ──
+  /** 仓库列表（含统计、可删除性、待审批状态） */
+  warehouses: async () => call(() => {
+    assertLoggedIn()
+    return mock.warehouseList(ctx())
+  }),
+
+  /** 申请删除仓库（管理员发起，需老板审批） */
+  requestDeleteWarehouse: async (id) => call(() => {
+    assertLoggedIn()
+    return mock.requestDeleteWarehouse(ctx(), id)
+  }),
+
+  /** 申请新增仓库（管理员发起，需老板审批） */
+  requestCreateWarehouse: async (body) => call(() => {
+    assertLoggedIn()
+    return mock.requestCreateWarehouse(ctx(), body)
+  }),
+
+  /** 审批列表 */
+  approvals: async (status) => call(() => {
+    assertLoggedIn()
+    return mock.approvals(ctx(), { status })
+  }),
+
+  /** 审批决定（仅老板） */
+  decideApproval: async (id, decision, comment) => call(() => {
+    assertLoggedIn()
+    return mock.decideApproval(ctx(), id, decision, comment)
+  }),
+
+  /** 设置用户授权仓库（仅超管） */
+  setUserWarehouses: async (userId, ids) => call(() => {
+    assertLoggedIn()
+    return mock.setUserWarehouses(ctx(), userId, ids)
+  }),
+
+  // ── 消息（红点） ──
+  messages: async () => call(() => {
+    assertLoggedIn()
+    return mock.messages(ctx())
+  }),
+
+  markMessagesRead: async (id) => call(() => {
+    assertLoggedIn()
+    return mock.markMessagesRead(ctx(), id)
+  }),
+
   /** 演示专用：重置全部数据回种子状态（简历 demo 的「一键还原」） */
   resetDemoData: async () => {
     mock.resetDb()
