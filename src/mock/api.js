@@ -1120,8 +1120,11 @@ export function transition(kind, id, toStatus, payload = {}, { token, baseId } =
  * 返回是否真的发生了库存变动（false 表示无过账逻辑或已过账）。
  */
 function postInventory(db, kind, row, toStatus, payload, user) {
-  // 幂等保护：已过账的单据不再重复处理
-  if (row.posted_at) return false
+  // 幂等保护：已过账的单据不再重复处理。
+  // delivery 例外 —— 它有两次独立的库存动作（发运 / 签收），
+  // 用 transit_out_at / transit_in_at 分别标记，不能共用单一 posted_at
+  // （否则第一次发运后置了 posted_at，签收时的库存动作会被挡住）。
+  if (kind !== 'delivery' && row.posted_at) return false
 
   const writeFlow = (args) => {
     db.inventory_flow.push({
@@ -1231,6 +1234,90 @@ function postInventory(db, kind, row, toStatus, payload, user) {
     recomputeHeaderTotals(db, 'quality', row)
     row.posted_at = new Date().toISOString()
     return true
+  }
+
+  // ── 配送：三段式在途库存 ──
+  //   ① 发运(in_transit/phipped)：起运仓 avail -N，起运仓 in_transit +N
+  //   ② 签收(signed/partial_signed)：起运仓 in_transit -M，目的仓 avail +M
+  //   ③ 异常(exception)：不发不结，留给人工处理（在途保持不动）
+  //
+  //   M 取 signed_qty（部分签收时 M < N，差额继续留在在途）。
+  //   注意：不同状态迁移要分开处理，所以这里用 status 判断而非 posted_at，
+  //   因为一张配送单会有两次库存动作（发运、签收）。
+  if (kind === 'delivery') {
+    const items = db.delivery_item.filter((i) => i.doc_id === row.id)
+
+    if (toStatus === 'in_transit' && !row.transit_out_at) {
+      for (const it of items) {
+        const qty = Number(it.shipped_qty) || 0
+        if (qty <= 0) continue
+
+        // 注意：delivery_item 表**没有 batch 字段**（见 01_schema.sql），
+        // 跨仓配送按备件汇总数量发货，不指定批次。
+        // 因此这里从该备件在起运仓的各批次库存中按顺序扣减，
+        // 而不是只看某一条库存行 —— 否则一旦库存分散在多个批次就会误报"库存不足"。
+        const candidates = db.inventory
+          .filter((i) => i.part_id === it.part_id && i.warehouse_id === row.from_wh_id && i.status === 'normal')
+          .sort((a, b) => b.avail_qty - a.avail_qty) // 优先扣大库存行，减少碎片
+        const total = candidates.reduce((s, i) => s + i.avail_qty, 0)
+        if (total < qty) {
+          const p = db.part.find((x) => x.id === it.part_id)
+          throw new ApiError(409, `库存不足，发运失败：${p?.name || '#' + it.part_id} 需要 ${qty}，可用 ${total}`)
+        }
+
+        let remain = qty
+        for (const inv of candidates) {
+          if (remain <= 0) break
+          const take = Math.min(inv.avail_qty, remain)
+          if (take <= 0) continue
+          const before = inv.avail_qty
+          inv.avail_qty = before - take
+          inv.in_transit_qty = (inv.in_transit_qty || 0) + take
+          inv.updated_at = new Date().toISOString()
+          writeFlow({
+            part_id: it.part_id, warehouse_id: row.from_wh_id, location_id: inv.location_id,
+            qty_change: -take, type: 'transit_out', before, after: inv.avail_qty
+          })
+          remain -= take
+        }
+      }
+      row.transit_out_at = new Date().toISOString()
+      return true
+    }
+
+    if ((toStatus === 'signed' || toStatus === 'partial_signed') && !row.transit_in_at) {
+      for (const it of items) {
+        const signed = Number(it.signed_qty) || 0
+        if (signed <= 0) continue
+
+        // 起运仓：在途减少（在途可能分散在多个批次行，逐行扣）
+        let transitRemain = signed
+        const transitRows = db.inventory
+          .filter((i) => i.part_id === it.part_id && i.warehouse_id === row.from_wh_id && (i.in_transit_qty || 0) > 0)
+          .sort((a, b) => b.in_transit_qty - a.in_transit_qty)
+        for (const inv of transitRows) {
+          if (transitRemain <= 0) break
+          const take = Math.min(inv.in_transit_qty, transitRemain)
+          inv.in_transit_qty -= take
+          inv.updated_at = new Date().toISOString()
+          transitRemain -= take
+        }
+
+        // 目的仓：可用增加（只有目的地是仓库时才入库；纯部门签收则货已离开库存体系）
+        if (row.to_wh_id) {
+          const inInv = findOrCreateInv(it.part_id, row.to_wh_id, null, '-')
+          const before = inInv.avail_qty
+          inInv.avail_qty = before + signed
+          inInv.updated_at = new Date().toISOString()
+          writeFlow({
+            part_id: it.part_id, warehouse_id: row.to_wh_id, location_id: null,
+            qty_change: signed, type: 'transit_in', before, after: inInv.avail_qty
+          })
+        }
+      }
+      row.transit_in_at = new Date().toISOString()
+      return true
+    }
   }
 
   return false

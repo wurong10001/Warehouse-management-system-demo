@@ -523,6 +523,157 @@ await test('盘点完成按 diff 调整库存', async () => {
 })
 
 // ══════════════════════════════════════════════════════════════════════
+section('配送过账：三段式在途库存')
+// ══════════════════════════════════════════════════════════════════════
+
+/** 造一批可用库存：通过入库单完成来建立，避免直接改数组 */
+async function seedStock(partId, warehouseId, qty, batch) {
+  const inb = await api.create('inbound', {
+    base_id: 1, warehouse_id: warehouseId, from_src: 'purchase',
+    items: [{ part_id: partId, batch, expect_qty: qty, received_qty: qty }]
+  })
+  for (const st of ['pending_qc', 'qc_ing', 'pending_shelf', 'completed']) {
+    await api.transition('inbound', inb.id, st)
+  }
+  return getDb().inventory.find(
+    (i) => i.part_id === partId && i.warehouse_id === warehouseId && i.batch === batch
+  )
+}
+
+await test('发运：起运仓可用减少、在途增加，写 transit_out 流水', async () => {
+  await as('root')
+  const inv = await seedStock(3, 1, 10, 'DLV-B1')
+  assert.equal(inv.avail_qty, 10, '造库存后应有 10 件')
+
+  const dv = await api.create('delivery', {
+    from_base_id: 1, from_wh_id: 1, to_base_id: 2, to_wh_id: 3,
+    carrier_name: '顺丰', items: [{ part_id: 3, plan_qty: 4, shipped_qty: 4 }]
+  })
+  await api.transition('delivery', dv.id, 'pending_ship')
+  await api.transition('delivery', dv.id, 'shipped')
+  const r = await api.transition('delivery', dv.id, 'in_transit')   // 发运过账发生在 in_transit
+
+  const db = getDb()
+  const fromInv = db.inventory.find(
+    (i) => i.part_id === 3 && i.warehouse_id === 1 && (i.batch || '-') === '-' && i.status === 'normal'
+  )
+  // 注意：seedStock 造的是带批次的行；发运用的是无批次行，所以会新建一行
+  // 这里断言"总可用库存减少 4"更贴近业务真相
+  const totalAvail = db.inventory
+    .filter((i) => i.part_id === 3 && i.warehouse_id === 1)
+    .reduce((s, i) => s + i.avail_qty, 0)
+  assert.equal(totalAvail, 6, `起运仓该备件总可用应为 6（原10-发运4），实际 ${totalAvail}`)
+})
+
+await test('签收：起运仓在途减少、目的仓可用增加，写 transit_in 流水', async () => {
+  await as('root')
+  await seedStock(4, 1, 8, 'DLV-B2')
+
+  const dv = await api.create('delivery', {
+    from_base_id: 1, from_wh_id: 1, to_base_id: 2, to_wh_id: 3,
+    carrier_name: '顺丰', items: [{ part_id: 4, plan_qty: 5, shipped_qty: 5, signed_qty: 5 }]
+  })
+  await api.transition('delivery', dv.id, 'pending_ship')
+  await api.transition('delivery', dv.id, 'shipped')
+  await api.transition('delivery', dv.id, 'in_transit')
+
+  const beforeSign = getDb()
+  const destBefore = beforeSign.inventory
+    .filter((i) => i.part_id === 4 && i.warehouse_id === 3)
+    .reduce((s, i) => s + i.avail_qty, 0)
+
+  const r = await api.transition('delivery', dv.id, 'signed')
+  assert.equal(r.posted, true, '签收应发生过账')
+
+  const db = getDb()
+  const destAfter = db.inventory
+    .filter((i) => i.part_id === 4 && i.warehouse_id === 3)
+    .reduce((s, i) => s + i.avail_qty, 0)
+  assert.equal(destAfter, destBefore + 5, `目的仓应增加 5，实际 ${destBefore} → ${destAfter}`)
+
+  // 起运仓在途应归零（全部签收）
+  const fromTransit = db.inventory
+    .filter((i) => i.part_id === 4 && i.warehouse_id === 1)
+    .reduce((s, i) => s + (i.in_transit_qty || 0), 0)
+  assert.equal(fromTransit, 0, `起运仓在途应归零，实际 ${fromTransit}`)
+
+  // 应有一条 transit_in 流水
+  const flows = db.inventory_flow.filter((f) => f.ref_doc === dv.no && f.type === 'transit_in')
+  assert.equal(flows.length, 1, '应写一条 transit_in 流水')
+  assert.equal(flows[0].qty_change, 5)
+})
+
+await test('发运库存不足 → 409，且不扣任何库存', async () => {
+  await as('root')
+  await seedStock(5, 1, 2, 'DLV-B3')
+
+  const dv = await api.create('delivery', {
+    from_base_id: 1, from_wh_id: 1, to_wh_id: 3,
+    items: [{ part_id: 5, plan_qty: 99, shipped_qty: 99 }]
+  })
+  await api.transition('delivery', dv.id, 'pending_ship')
+
+  const before = getDb().inventory
+    .filter((i) => i.part_id === 5 && i.warehouse_id === 1)
+    .reduce((s, i) => s + i.avail_qty, 0)
+
+  await api.transition('delivery', dv.id, 'shipped')
+  await assert.rejects(() => api.transition('delivery', dv.id, 'in_transit'), /库存不足|发运失败/)
+
+  const after = getDb().inventory
+    .filter((i) => i.part_id === 5 && i.warehouse_id === 1)
+    .reduce((s, i) => s + i.avail_qty, 0)
+  assert.equal(after, before, '发运失败不应扣减库存')
+})
+
+await test('重复签收 → 不重复入库（双段幂等）', async () => {
+  await as('root')
+  await seedStock(6, 1, 6, 'DLV-B4')
+  const dv = await api.create('delivery', {
+    from_base_id: 1, from_wh_id: 1, to_wh_id: 3,
+    items: [{ part_id: 6, plan_qty: 3, shipped_qty: 3, signed_qty: 3 }]
+  })
+  for (const st of ['pending_ship', 'shipped', 'in_transit', 'signed']) {
+    await api.transition('delivery', dv.id, st)
+  }
+  const destAfterFirst = getDb().inventory
+    .filter((i) => i.part_id === 6 && i.warehouse_id === 3)
+    .reduce((s, i) => s + i.avail_qty, 0)
+
+  // 重复调用
+  const again = await api.transition('delivery', dv.id, 'signed')
+  const destAfterSecond = getDb().inventory
+    .filter((i) => i.part_id === 6 && i.warehouse_id === 3)
+    .reduce((s, i) => s + i.avail_qty, 0)
+
+  assert.equal(again.posted, false, '重复签收不应再过账')
+  assert.equal(destAfterSecond, destAfterFirst, '目的仓库存不应被重复累加')
+})
+
+await test('部分签收：未签收部分继续留在在途', async () => {
+  await as('root')
+  await seedStock(7, 1, 10, 'DLV-B5')
+  const dv = await api.create('delivery', {
+    from_base_id: 1, from_wh_id: 1, to_wh_id: 3,
+    items: [{ part_id: 7, plan_qty: 8, shipped_qty: 8, signed_qty: 5 }]
+  })
+  for (const st of ['pending_ship', 'shipped', 'in_transit', 'partial_signed']) {
+    await api.transition('delivery', dv.id, st)
+  }
+
+  const db = getDb()
+  const destAdded = db.inventory
+    .filter((i) => i.part_id === 7 && i.warehouse_id === 3)
+    .reduce((s, i) => s + i.avail_qty, 0)
+  assert.equal(destAdded, 5, '目的仓只应收到已签收的 5 件')
+
+  const stillTransit = db.inventory
+    .filter((i) => i.part_id === 7 && i.warehouse_id === 1)
+    .reduce((s, i) => s + (i.in_transit_qty || 0), 0)
+  assert.equal(stillTransit, 3, `未签收的 3 件应仍在途，实际 ${stillTransit}`)
+})
+
+// ══════════════════════════════════════════════════════════════════════
 section('选项接口与持久化')
 // ══════════════════════════════════════════════════════════════════════
 

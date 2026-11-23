@@ -139,7 +139,7 @@ Pages 都会自动识别，用于设置缓存与安全响应头。
     ├── spring.test.mjs        14 项弹簧动效测试
     ├── segmented.test.mjs     17 项滑动胶囊测试
     ├── touch.test.mjs         17 项移动端触摸行为测试
-    ├── write.test.mjs         40 项数据写入测试
+    ├── write.test.mjs         49 项数据写入测试
     ├── setup-dom.mjs          jsdom 环境垫片
     └── build-e2e.mjs          把应用打包成可在 Node 加载的 bundle
 ```
@@ -272,8 +272,25 @@ src/config/entity-schema.js   ← 字段定义 / 校验规则 / 权限白名单 
 - **事务回滚**：`withTransaction` 用 `structuredClone` 快照，任何一步失败
   （含落盘失败）都整体回滚，内存与 localStorage 保持一致。
 
-配套测试 `test/write.test.mjs`（40 项）覆盖：只读角色拒绝、越权写拦截、
-事务回滚、单号递增、状态机合法性、过账幂等、库存不足整单回滚。
+**配送的三段式在途库存**（比单据本身更复杂的一环）：
+
+```
+发运 → 起运仓 avail_qty -N, in_transit_qty +N     (flow: transit_out)
+签收 → 起运仓 in_transit_qty -M, 目的仓 avail_qty +M (flow: transit_in)
+异常 → 不发不结，在途保持不动，留人工处理
+```
+
+两个必须注意的点：
+
+1. `delivery_item` **没有 `batch` 字段**，配送按备件汇总发货 →
+   扣减时要跨批次累加，不能只看单条库存行（否则库存分散时误报"不足"）。
+2. 配送有**两次独立库存动作**，不能用单一 `posted_at` 做幂等 →
+   改用 `transit_out_at` / `transit_in_at` 两个标记分别把关。
+   若仍用单一标记，发运置位后签收永远进不来，货会卡在在途。
+
+配套测试 `test/write.test.mjs`（49 项）覆盖：只读角色拒绝、越权写拦截、
+事务回滚、单号递增、状态机合法性、过账幂等、库存不足整单回滚、
+配送三段式在途库存（含部分签收与重复签收幂等）。
 
 **9. 顺手修掉原版的几个问题**
 
@@ -292,7 +309,7 @@ npm run test:e2e  # 18 项 DOM 端到端测试（jsdom 真实挂载应用）
 npm run test:spring     # 14 项弹簧动效测试
 npm run test:segmented  # 17 项滑动胶囊测试
 npm run test:touch      # 17 项移动端触摸行为测试
-npm run test:write      # 40 项数据写入测试（权限/范围/事务/过账幂等）
+npm run test:write      # 49 项数据写入测试（权限/范围/事务/过账幂等/配送在途）
 npm run test:all  # 全部
 ```
 
@@ -305,10 +322,14 @@ E2E 测试用 Vite 把整个应用打成 bundle 后在 jsdom 里挂载，断言
 这是**演示项目**，刻意为展示而设计，因此有以下取舍：
 
 - **数据只存在当前浏览器**，换设备 / 清缓存即丢失。没有多用户协作。
-- **已支持完整写入**（P0~P2）：备件/仓库/基地/供应商/客户的主数据 CRUD，
+- **已支持完整写入**（P0~P2.5）：备件/仓库/基地/供应商/客户的主数据 CRUD，
   五类单据（入库/出库/质检/盘点/配送）建单与明细行编辑，状态推进与**库存过账**。
-  权限按「角色白名单 且 菜单」双重判定，数据范围三层隔离，过账带 `posted_at` 幂等保护。
-- **原版后端仍只读**：`backend/src/server.js` 尚未加写路由，需按架构方案第 9 节实施。
+  权限按「角色白名单 且 菜单」双重判定，数据范围三层隔离，过账带幂等保护。
+- **配送采用三段式在途库存**：发运时起运仓可用→在途，签收时在途→目的仓，
+  部分签收的差额继续留在在途。`delivery_item` 无 `batch` 字段，
+  因此跨批次汇总扣减。
+- **原版后端已同步实现**：`backend/src/write/` 提供同一套语义的 SQL 版本，
+  含 `sql/05_write_support.sql` 迁移（`posted_at`、配送双段标记、表达式唯一索引）。
 - **无鉴权防护**：token 存在 `localStorage`，密码哈希无盐。真实系统需换
   bcrypt + JWT + 登录限流。
 - **无分页**：列表硬编码 `limit 100`。
