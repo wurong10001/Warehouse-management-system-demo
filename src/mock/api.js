@@ -10,6 +10,15 @@
  */
 import { getDb, persist, withTransaction, nextId, resetDb } from './db.js'
 import { sha256 } from './sha256.js'
+import {
+  ENTITY_SCHEMA,
+  SCOPE_COLUMNS,
+  canWrite,
+  canEdit,
+  canDelete,
+  canTransition,
+  validate
+} from '../config/entity-schema.js'
 
 const TOKEN_KEY = 'wms_demo_tokens'
 
@@ -744,6 +753,460 @@ export function dashboard({ token, baseId }) {
 
   return { metrics, todos, alerts, trend, bases, base_name: baseName }
 }
+
+
+// ══════════════════════════════════════════════════════════════════════
+//  通用写入（配置驱动，与 entity-schema.js 共用一份字段/权限/状态机定义）
+//
+//  与后端 Fastify 版的对应关系：
+//    create/update/remove  → POST/PATCH/DELETE /api/:kind[/:id]
+//    options               → GET /api/options
+//    transition            → POST /api/:kind/:id/transition
+//  所有写操作都在 withTransaction 内完成，失败整体回滚。
+// ══════════════════════════════════════════════════════════════════════
+
+/** 取实体配置；未知 kind 直接 404，避免任意表被写 */
+function schemaOf(kind) {
+  const schema = ENTITY_SCHEMA[kind]
+  if (!schema) throw new ApiError(404, `unknown kind: ${kind}`)
+  return schema
+}
+
+/** 写权限：角色白名单 且 拥有对应菜单（与前端 canWrite 同源） */
+function requireWrite(user, kind) {
+  if (!canWrite(user, kind)) throw new ApiError(403, '当前角色无写入权限')
+}
+
+/**
+ * 取一条数据并校验数据范围。
+ * 与 runDetail 的语义一致：范围外按 404 处理，不暴露"存在但无权"的信号。
+ */
+function scopedRowOr404(kind, db, id, user, baseId) {
+  const schema = schemaOf(kind)
+  const row = db[schema.table].find((r) => r.id === id)
+  if (!row) throw new ApiError(404, '数据不存在')
+
+  const cols = SCOPE_COLUMNS[kind]
+  // 主数据若未配置范围列，则所有登录用户可改自己权限内的实体（权限已由 requireWrite 把关）
+  if (!cols) return row
+
+  const scope = scopeOf(user, baseId, cols.base, cols.warehouse)
+  if (scope && row[scope.field] !== scope.val) throw new ApiError(404, '不存在或无权查看')
+  return row
+}
+
+/** 校验 body 里的 base_id / warehouse_id 是否落在当前用户范围内 */
+function assertWriteScope(kind, body, user, baseId) {
+  const cols = SCOPE_COLUMNS[kind]
+  if (!cols) return
+
+  // 用户绑定仓库 → 只能写本仓库
+  if (user.warehouse_id) {
+    const wh = body[cols.warehouse]
+    if (wh != null && Number(wh) !== user.warehouse_id) {
+      throw new ApiError(403, '只能操作本仓库的数据')
+    }
+    return
+  }
+
+  // 用户绑定基地（或无绑定、跟随顶栏） → 只能写本基地
+  const effectiveBase = user.base_id || Number(baseId) || null
+  if (effectiveBase) {
+    const b = body[cols.base]
+    if (b != null && Number(b) !== effectiveBase) {
+      throw new ApiError(403, '只能操作本基地的数据')
+    }
+  }
+}
+
+// ── 单号生成：PREFIX-YYYYMMDD-NNN，当天同前缀最大序号 +1 ────────────────
+function genNo(db, table, prefix) {
+  const d = new Date()
+  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  const head = `${prefix}-${date}-`
+  const maxSeq = (db[table] || [])
+    .map((r) => String(r.no || ''))
+    .filter((no) => no.startsWith(head))
+    .reduce((max, no) => Math.max(max, Number(no.slice(head.length)) || 0), 0)
+  return `${head}${String(maxSeq + 1).padStart(3, '0')}`
+}
+
+/** 按配置从 body 里挑出可写字段（丢弃多余字段，防脏写） */
+function pickFields(fields, body) {
+  const out = {}
+  for (const f of fields) {
+    if (!(f.key in (body || {}))) continue
+    let v = body[f.key]
+    if (v === '' || v === undefined) v = null
+    if (f.type === 'number' && v !== null) v = Number(v)
+    if (f.type === 'switch') v = Boolean(v)
+    if (f.type === 'text' && typeof v === 'string' && f.upper) v = v.toUpperCase()
+    out[f.key] = v
+  }
+  return out
+}
+
+/** 写入明细行（逐行分配 id） */
+function insertItems(db, schema, docId, items) {
+  for (const raw of items || []) {
+    const row = pickFields(schema.items, raw)
+    row.id = nextId(db, schema.itemTable)
+    row.doc_id = docId
+    // 派生字段：盘点差异自动计算，不信任前端
+    if (schema.itemTable === 'stocktake_item') {
+      row.diff = row.actual_qty == null || row.book_qty == null
+        ? null
+        : Number(row.actual_qty) - Number(row.book_qty)
+    }
+    db[schema.itemTable].push(row)
+  }
+}
+
+/** 文档类实体的头表汇总字段（total / qty 由明细重算） */
+function recomputeHeaderTotals(db, kind, row) {
+  const schema = schemaOf(kind)
+  if (!schema.itemTable) return
+  const items = db[schema.itemTable].filter((i) => i.doc_id === row.id)
+  if (kind === 'quality') {
+    row.total = items.reduce((s, i) => s + (Number(i.check_qty) || 0), 0)
+    row.pass_qty = items.reduce((s, i) => s + (Number(i.pass_qty) || 0), 0)
+    row.fail_qty = items.reduce((s, i) => s + (Number(i.fail_qty) || 0), 0)
+  }
+  if (kind === 'delivery') {
+    row.qty = items.reduce((s, i) => s + (Number(i.plan_qty) || 0), 0)
+  }
+}
+
+/** 唯一性检查（编码类字段） */
+function assertUnique(db, schema, body, excludeId = null) {
+  for (const f of schema.fields) {
+    if (!f.unique) continue
+    const v = body[f.key]
+    if (v == null) continue
+    const dup = db[schema.table].find((r) => r[f.key] === v && r.id !== excludeId)
+    if (dup) throw new ApiError(409, `${f.label}已存在`)
+  }
+}
+
+/** 删除保护：被引用的数据不允许硬删 */
+function assertDeletable(db, kind, row) {
+  if (kind === 'part') {
+    const usedInInventory = db.inventory.some((i) => i.part_id === row.id)
+    const usedInItems = ['doc_in_item', 'doc_out_item', 'quality_item', 'stocktake_item', 'delivery_item']
+      .some((t) => (db[t] || []).some((i) => i.part_id === row.id))
+    if (usedInInventory || usedInItems) {
+      throw new ApiError(409, '该备件已被库存或单据引用，不可删除。可改为「已报废」标记')
+    }
+  }
+  if (kind === 'warehouse') {
+    const hasLoc = (db.location || []).some((l) => l.warehouse_id === row.id)
+    const hasInv = (db.inventory || []).some((i) => i.warehouse_id === row.id)
+    if (hasLoc || hasInv) throw new ApiError(409, '该仓库下还有库位或库存，不可删除')
+  }
+  if (kind === 'base') {
+    const hasWh = (db.warehouse || []).some((w) => w.base_id === row.id)
+    if (hasWh) throw new ApiError(409, '该基地下还有仓库，不可删除')
+  }
+  if (kind === 'supplier') {
+    const hasPart = (db.part || []).some((p) => p.supplier_id === row.id)
+    if (hasPart) throw new ApiError(409, '该供应商已被备件引用，不可删除')
+  }
+}
+
+// ── 公开写入接口 ──────────────────────────────────────────────────────
+
+/** 新建（对应后端 POST /api/:kind） */
+export function create(kind, body, { token, baseId } = {}) {
+  const user = requireUser(token)
+  const schema = schemaOf(kind)
+  requireWrite(user, kind)
+
+  const { ok, errors } = validate(kind, body)
+  if (!ok) {
+    const first = Object.values(errors)[0]
+    throw new ApiError(400, first || '数据校验未通过')
+  }
+  assertWriteScope(kind, body, user, baseId)
+
+  return withTransaction((db) => {
+    assertUnique(db, schema, body)
+    const row = pickFields(schema.fields, body)
+    row.id = nextId(db, schema.table)
+
+    if (schema.prefix) {
+      row.no = genNo(db, schema.table, schema.prefix)
+      row.status = schema.initialStatus
+      row.creator_id = user.id
+      row.created_at = new Date().toISOString()
+      row.updated_at = row.created_at
+      // 过账标记：null 表示尚未过账，用于 transition 幂等保护
+      row.posted_at = null
+    } else if (schema.table === 'part') {
+      row.is_scrap = Boolean(body.is_scrap)
+      row.created_at = new Date().toISOString()
+    }
+
+    db[schema.table].push(row)
+    if (schema.itemTable) {
+      insertItems(db, schema, row.id, body.items)
+      recomputeHeaderTotals(db, kind, row)
+    }
+
+    writeLog(db, user.id, `${kind}.create`, `新建${schema.label} ${row.no || row.code || '#' + row.id}`)
+    return { id: row.id, ...(row.no ? { no: row.no } : {}) }
+  })
+}
+
+/** 编辑（对应后端 PATCH /api/:kind/:id） */
+export function update(kind, id, body, { token, baseId } = {}) {
+  const user = requireUser(token)
+  const schema = schemaOf(kind)
+  requireWrite(user, kind)
+
+  const { ok, errors } = validate(kind, body, { partial: true })
+  if (!ok) throw new ApiError(400, Object.values(errors)[0] || '数据校验未通过')
+
+  return withTransaction((db) => {
+    const row = scopedRowOr404(kind, db, Number(id), user, baseId)
+
+    // 状态保护：只有允许编辑的状态才能改
+    if (schema.itemTable && !canEdit(kind, row.status)) {
+      throw new ApiError(409, '该状态不可编辑')
+    }
+    assertUnique(db, schema, body, row.id)
+    assertWriteScope(kind, body, user, baseId)
+
+    Object.assign(row, pickFields(schema.fields, body))
+    if (schema.itemTable) {
+      row.updated_at = new Date().toISOString()
+      // 明细采用「全量替换」语义：传了 items 才重写
+      if (Array.isArray(body.items)) {
+        db[schema.itemTable] = db[schema.itemTable].filter((i) => i.doc_id !== row.id)
+        insertItems(db, schema, row.id, body.items)
+      }
+      recomputeHeaderTotals(db, kind, row)
+    }
+
+    writeLog(db, user.id, `${kind}.update`, `修改${schema.label} ${row.no || row.code || '#' + row.id}`)
+    return { ok: true }
+  })
+}
+
+/** 删除（对应后端 DELETE /api/:kind/:id） */
+export function remove(kind, id, { token, baseId } = {}) {
+  const user = requireUser(token)
+  const schema = schemaOf(kind)
+  requireWrite(user, kind)
+
+  return withTransaction((db) => {
+    const row = scopedRowOr404(kind, db, Number(id), user, baseId)
+
+    if (schema.itemTable && !canDelete(kind, row.status)) {
+      throw new ApiError(409, '该状态不可删除')
+    }
+    assertDeletable(db, kind, row)
+
+    db[schema.table] = db[schema.table].filter((r) => r.id !== row.id)
+    if (schema.itemTable) {
+      db[schema.itemTable] = db[schema.itemTable].filter((i) => i.doc_id !== row.id)
+    }
+
+    writeLog(db, user.id, `${kind}.remove`, `删除${schema.label} ${row.no || row.code || '#' + row.id}`)
+    return { ok: true }
+  })
+}
+
+/**
+ * 表单下拉数据（对应后端 GET /api/options）。
+ * 一次性返回，减少请求；数据量是演示级（几十条），可接受。
+ */
+export function options(kind, { token, baseId } = {}) {
+  const user = requireUser(token)
+  const db = getDb()
+  const scope = { user, baseId }
+
+  // 范围过滤：仓库/库位按用户范围；基地按用户绑定；其余全局
+  const bases = user.base_id
+    ? db.base.filter((b) => b.id === user.base_id)
+    : db.base
+  const warehouses = applyScope(
+    db.warehouse.map((w) => ({ _base: w.base_id, _wh: w.id, out: { id: w.id, name: w.name, base_id: w.base_id, code: w.code } })),
+    scopeOf(user, baseId, '_base', '_wh')
+  ).map((r) => r.out)
+  const visibleWhIds = new Set(warehouses.map((w) => w.id))
+  const locations = db.location
+    .filter((l) => l.type === 'bin' && visibleWhIds.has(l.warehouse_id))
+    .map((l) => ({ id: l.id, name: l.code, warehouse_id: l.warehouse_id }))
+
+  return {
+    bases: bases.map((b) => ({ id: b.id, name: b.name, code: b.code })),
+    warehouses,
+    locations,
+    parts: db.part.map((p) => ({ id: p.id, name: p.name, code: p.code, spec: p.spec, unit: p.unit })),
+    suppliers: db.supplier.map((s) => ({ id: s.id, name: s.name, code: s.code })),
+    customers: db.customer.map((c) => ({ id: c.id, name: c.name, code: c.code })),
+    users: db.sys_user.filter((u) => u.active).map((u) => ({ id: u.id, name: u.name, code: u.username })),
+    inboundDocs: db.doc_in.map((d) => ({ id: d.id, name: d.no, code: d.no })),
+    // 供前端 canWrite 判断
+    currentUser: { roles: user.roles, menus: user.menus }
+  }
+}
+
+/**
+ * 状态推进（对应后端 POST /api/:kind/:id/transition）。
+ *
+ * ⚠️ 核心：过账必须幂等。
+ * 用 posted_at 作为标记，只有「首次」进入终态时才过账；
+ * 重复调用（重复点击 / 重试 / 并发）直接返回，不重复加减库存。
+ */
+export function transition(kind, id, toStatus, payload = {}, { token, baseId } = {}) {
+  const user = requireUser(token)
+  const schema = schemaOf(kind)
+  requireWrite(user, kind)
+  if (!schema.itemTable) throw new ApiError(400, '该实体没有状态流转')
+
+  return withTransaction((db) => {
+    const row = scopedRowOr404(kind, db, Number(id), user, baseId)
+
+    if (row.status === toStatus) {
+      // 已处于目标状态：幂等返回，不报错也不重复过账
+      return { ok: true, posted: false }
+    }
+    if (!canTransition(kind, row.status, toStatus)) {
+      throw new ApiError(409, `不允许从「${row.status}」流转到「${toStatus}」`)
+    }
+
+    const posted = postInventory(db, kind, row, toStatus, payload, user)
+    row.status = toStatus
+    row.updated_at = new Date().toISOString()
+
+    writeLog(db, user.id, `${kind}.transition`, `${row.no || '#' + row.id} → ${toStatus}${posted ? '（已过账）' : ''}`)
+    return { ok: true, posted }
+  })
+}
+
+/**
+ * 库存过账：只在单据进入「终态」时执行一次。
+ * 返回是否真的发生了库存变动（false 表示无过账逻辑或已过账）。
+ */
+function postInventory(db, kind, row, toStatus, payload, user) {
+  // 幂等保护：已过账的单据不再重复处理
+  if (row.posted_at) return false
+
+  const writeFlow = (args) => {
+    db.inventory_flow.push({
+      id: nextId(db, 'inventory_flow'),
+      part_id: args.part_id,
+      warehouse_id: args.warehouse_id,
+      location_id: args.location_id ?? null,
+      qty_change: args.qty_change,
+      type: args.type,
+      ref_doc: row.no,
+      before_qty: args.before,
+      after_qty: args.after,
+      operator_id: user.id,
+      ts: new Date().toISOString()
+    })
+  }
+
+  /** 定位或创建库存行（按 warehouse + location + part + batch + status 唯一） */
+  const findOrCreateInv = (part_id, warehouse_id, location_id, batch, status = 'normal') => {
+    let inv = db.inventory.find(
+      (i) => i.part_id === part_id && i.warehouse_id === warehouse_id &&
+        (i.location_id ?? null) === (location_id ?? null) &&
+        (i.batch || '-') === (batch || '-') && i.status === status
+    )
+    if (!inv) {
+      const wh = db.warehouse.find((w) => w.id === warehouse_id)
+      inv = {
+        id: nextId(db, 'inventory'),
+        base_id: wh?.base_id ?? null,
+        warehouse_id,
+        location_id: location_id ?? null,
+        part_id,
+        batch: batch || '-',
+        avail_qty: 0, frozen_qty: 0, in_transit_qty: 0,
+        status,
+        updated_at: new Date().toISOString()
+      }
+      db.inventory.push(inv)
+    }
+    return inv
+  }
+
+  // ── 入库：完成后按 received_qty 增加可用库存 ──
+  if (kind === 'inbound' && toStatus === 'completed') {
+    const items = db.doc_in_item.filter((i) => i.doc_id === row.id)
+    for (const it of items) {
+      const qty = Number(it.received_qty) || 0
+      if (qty <= 0) continue
+      const inv = findOrCreateInv(it.part_id, row.warehouse_id, it.location_id, it.batch)
+      const before = inv.avail_qty
+      inv.avail_qty = before + qty
+      inv.updated_at = new Date().toISOString()
+      writeFlow({ part_id: it.part_id, warehouse_id: row.warehouse_id, location_id: it.location_id, qty_change: qty, type: 'in', before, after: inv.avail_qty })
+    }
+    row.posted_at = new Date().toISOString()
+    return true
+  }
+
+  // ── 出库：完成后按 picked_qty 扣减，库存不足整单回滚 ──
+  if (kind === 'outbound' && toStatus === 'completed') {
+    const items = db.doc_out_item.filter((i) => i.doc_id === row.id)
+
+    // 先校验库存是否足够（全部通过才动手，避免部分扣减）
+    const plans = []
+    for (const it of items) {
+      const qty = Number(it.picked_qty) || 0
+      if (qty <= 0) continue
+      const inv = db.inventory.find(
+        (i) => i.part_id === it.part_id && i.warehouse_id === row.warehouse_id &&
+          (i.location_id ?? null) === (it.location_id ?? null) && i.status === 'normal'
+      )
+      if (!inv || inv.avail_qty < qty) {
+        const p = db.part.find((x) => x.id === it.part_id)
+        throw new ApiError(409, `库存不足，过账失败：${p?.name || '#' + it.part_id} 需要 ${qty}，可用 ${inv?.avail_qty ?? 0}`)
+      }
+      plans.push({ it, inv, qty })
+    }
+    // 全部校验通过后才执行扣减
+    for (const { it, inv, qty } of plans) {
+      const before = inv.avail_qty
+      inv.avail_qty = before - qty
+      inv.updated_at = new Date().toISOString()
+      writeFlow({ part_id: it.part_id, warehouse_id: row.warehouse_id, location_id: it.location_id, qty_change: -qty, type: 'out', before, after: inv.avail_qty })
+    }
+    row.posted_at = new Date().toISOString()
+    return true
+  }
+
+  // ── 盘点：完成后按 diff 调整库存 ──
+  if (kind === 'stocktake' && toStatus === 'completed') {
+    const items = db.stocktake_item.filter((i) => i.doc_id === row.id)
+    for (const it of items) {
+      const diff = it.diff == null ? 0 : Number(it.diff)
+      if (!diff) continue
+      const inv = findOrCreateInv(it.part_id, row.warehouse_id, it.location_id, it.batch)
+      const before = inv.avail_qty
+      inv.avail_qty = before + diff
+      inv.updated_at = new Date().toISOString()
+      writeFlow({ part_id: it.part_id, warehouse_id: row.warehouse_id, location_id: it.location_id, qty_change: diff, type: 'count_adjust', before, after: inv.avail_qty })
+    }
+    row.posted_at = new Date().toISOString()
+    return true
+  }
+
+  // ── 质检：只汇总单头，不改库存（不合格品状态变更留给后续） ──
+  if (kind === 'quality' && toStatus === 'completed') {
+    recomputeHeaderTotals(db, 'quality', row)
+    row.posted_at = new Date().toISOString()
+    return true
+  }
+
+  return false
+}
+
+export { canWrite, canTransition }
 
 // ── 用户管理（仅超级管理员，对应后端 requireSuper） ────────────────────
 function requireSuper(user) {

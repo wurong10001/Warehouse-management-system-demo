@@ -30,37 +30,72 @@ function readStorage() {
 export function getDb() {
   if (!cache) {
     cache = readStorage() || createSeedDatabase()
-    persist()
+    // 首次初始化：落盘失败不阻断（还只是种子数据，没有用户修改）
+    try {
+      persist()
+    } catch {
+      /* 只读场景下仍可继续，等真正写操作时再明确报错 */
+    }
   }
   return cache
 }
 
-/** 把内存中的库写回 localStorage */
+/**
+ * 把内存中的库写回 localStorage。
+ *
+ * 失败时**必须抛错**，不能静默吞掉：
+ * 写入功能上线后，如果 persist 失败却只 warn，用户会看到「保存成功」的提示，
+ * 但刷新页面数据就没了 —— 这是最难排查的一类事故。
+ * 只读时代吞异常是合理的（退化为纯内存演示），有写操作后必须显式失败。
+ */
 export function persist() {
   if (!cache) return
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cache))
   } catch (e) {
-    // 隐私模式下 localStorage 可能不可写：退化为纯内存运行，不阻塞演示
-    console.warn('[wms-demo] 本地存储写入失败，本次会话仅保存在内存中', e)
+    const isQuota = e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014)
+    if (isQuota) {
+      throw new Error(
+        '本地存储空间已满，本次修改未保存。请到登录页点「重置演示数据」清理后重试。'
+      )
+    }
+    // 隐私模式等不可写场景：明确告知，而不是假装成功
+    throw new Error('本地存储不可用，本次修改未保存（浏览器可能处于隐私模式）')
   }
 }
 
 /**
- * 事务：先快照，回调抛错即整体回滚。
+ * 落盘，失败时回滚内存缓存。
+ * 供 withTransaction 使用：保证「内存状态」与「磁盘状态」一致，
+ * 不会出现内存已改、磁盘没改的错位。
+ */
+function persistOrRollback(snapshot) {
+  try {
+    persist()
+  } catch (e) {
+    cache = snapshot
+    throw e
+  }
+}
+
+/**
+ * 事务：先快照，回调抛错即整体回滚；落盘失败同样回滚。
  * 对应后端 `BEGIN ... COMMIT / ROLLBACK`，避免写一半留下脏数据。
  */
 export function withTransaction(fn) {
   const db = getDb()
   const snapshot = structuredClone(db)
+  let result
   try {
-    const result = fn(db)
-    persist()
-    return result
+    result = fn(db)
   } catch (e) {
+    // 业务校验失败：内存回滚，磁盘未动
     cache = snapshot
     throw e
   }
+  // 业务成功 → 落盘；若落盘失败，内存与磁盘都要回到快照
+  persistOrRollback(snapshot)
+  return result
 }
 
 /** 重置为初始演示数据 */

@@ -16,6 +16,9 @@ const BASE_KEY = 'wms_base'
 const getToken = () => localStorage.getItem(TOKEN_KEY)
 const getBaseId = () => localStorage.getItem(BASE_KEY)
 
+/** 写接口统一上下文：token 与顶栏基地 */
+const ctx = () => ({ token: getToken(), baseId: getBaseId() })
+
 /** 浏览器环境判断：Node 测试 / SSR 下没有 location、window */
 const hasWindow = typeof window !== 'undefined'
 const currentHash = () => (hasWindow ? window.location.hash : '')
@@ -105,6 +108,37 @@ export const api = {
   roles: async () => call(() => {
     assertLoggedIn()
     return mock.roles(getToken())
+  }),
+
+  // ── 通用写入（与后端 Fastify 版签名一致，视图层只写一遍） ────────────
+  /** 新建；单据自动分配单号 */
+  create: async (kind, body) => call(() => {
+    assertLoggedIn()
+    return mock.create(kind, body, ctx())
+  }),
+
+  /** 编辑；仅允许编辑的状态才生效 */
+  update: async (kind, id, body) => call(() => {
+    assertLoggedIn()
+    return mock.update(kind, Number(id), body, ctx())
+  }),
+
+  /** 删除；有引用或状态不允许时返回 409 */
+  remove: async (kind, id) => call(() => {
+    assertLoggedIn()
+    return mock.remove(kind, Number(id), ctx())
+  }),
+
+  /** 表单下拉数据（基地/仓库/库位/备件/供应商/客户/用户） */
+  options: async (kind) => call(() => {
+    assertLoggedIn()
+    return mock.options(kind, ctx())
+  }),
+
+  /** 状态推进（含库存过账，内部幂等） */
+  transition: async (kind, id, toStatus, payload) => call(() => {
+    assertLoggedIn()
+    return mock.transition(kind, Number(id), toStatus, payload || {}, ctx())
   }),
 
   createUser: async (body) => call(() => mock.createUser(getToken(), body)),

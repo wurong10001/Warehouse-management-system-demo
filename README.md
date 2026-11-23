@@ -126,10 +126,11 @@ Pages 都会自动识别，用于设置缓存与安全响应头。
 │   │   └── sha256.js          纯 JS 密码哈希（不依赖安全上下文）
 │   ├── api/index.js           前端适配层：函数签名与原 fetch 版完全一致
 │   ├── config/menu.js         菜单 / 权限键清单
+│   ├── config/entity-schema.js 实体写入配置（字段/校验/权限/状态机）
 │   ├── router/index.js        路由（hash 模式）+ 登录守卫
 │   ├── stores/auth.js         Pinia 登录态
 │   ├── views/                 看板、列表、库存、用户管理、登录
-│   ├── components/            外壳、详情抽屉、状态标签、状态流程、滑动胶囊
+│   ├── components/            外壳、详情抽屉、状态标签、状态流程、滑动胶囊、通用表单
 │   ├── composables/           移动端断点、下拉手势关闭
 │   └── styles/                Apple Liquid Glass 设计 token
 └── test/
@@ -138,6 +139,7 @@ Pages 都会自动识别，用于设置缓存与安全响应头。
     ├── spring.test.mjs        14 项弹簧动效测试
     ├── segmented.test.mjs     17 项滑动胶囊测试
     ├── touch.test.mjs         17 项移动端触摸行为测试
+    ├── write.test.mjs         40 项数据写入测试
     ├── setup-dom.mjs          jsdom 环境垫片
     └── build-e2e.mjs          把应用打包成可在 Node 加载的 bundle
 ```
@@ -246,7 +248,34 @@ iOS 的分段控件不是「每个选项各自切换背景」，而是**容器�
 > 没有采用「`touchstart` 上 `preventDefault`」的做法：它会连带阻止滚动，
 > 并在多数浏览器里让 `click` 不再触发 —— 按钮会直接点不动。
 
-**8. 顺手修掉原版的几个问题**
+**8. 数据写入架构（配置驱动）**
+
+写入能力靠一份共享配置驱动，前端表单与后端校验**读同一份定义**，避免规则漂移：
+
+```
+src/config/entity-schema.js   ← 字段定义 / 校验规则 / 权限白名单 / 状态机 / 单号前缀
+        │
+        ├─→ EntityFormDialog.vue   渲染表单、明细行、联动下拉
+        └─→ src/mock/api.js        create/update/remove/options/transition
+                                   └─ withTransaction（失败整体回滚）
+```
+
+关键设计：
+
+- **权限「与」判定**：`canWrite = 角色白名单 ∈ writeRoles && 菜单 ∈ menus`。
+  角色决定职责边界（质检员不该建入库单），菜单决定界面可见性，两者同时满足才放行。
+- **数据范围三层**：绑仓库 → 只见本仓库；绑基地 → 只见本基地；总部 → 跟随顶栏基地。
+  写入时校验 `base_id/warehouse_id` 是否在范围内，越权返回 403/404。
+- **过账幂等**：单据加 `posted_at`，重复推进到终态返回 `{ posted: false }`，
+  **库存不会被重复累加** —— 这是原架构方案遗漏的致命点。
+- **服务端重算派生字段**：`total`/`qty`/`diff` 一律以明细重算，不信任前端传值。
+- **事务回滚**：`withTransaction` 用 `structuredClone` 快照，任何一步失败
+  （含落盘失败）都整体回滚，内存与 localStorage 保持一致。
+
+配套测试 `test/write.test.mjs`（40 项）覆盖：只读角色拒绝、越权写拦截、
+事务回滚、单号递增、状态机合法性、过账幂等、库存不足整单回滚。
+
+**9. 顺手修掉原版的几个问题**
 
 | 原版问题 | 静态版处理 |
 |---|---|
@@ -263,6 +292,7 @@ npm run test:e2e  # 18 项 DOM 端到端测试（jsdom 真实挂载应用）
 npm run test:spring     # 14 项弹簧动效测试
 npm run test:segmented  # 17 项滑动胶囊测试
 npm run test:touch      # 17 项移动端触摸行为测试
+npm run test:write      # 40 项数据写入测试（权限/范围/事务/过账幂等）
 npm run test:all  # 全部
 ```
 
@@ -275,8 +305,10 @@ E2E 测试用 Vite 把整个应用打成 bundle 后在 jsdom 里挂载，断言
 这是**演示项目**，刻意为展示而设计，因此有以下取舍：
 
 - **数据只存在当前浏览器**，换设备 / 清缓存即丢失。没有多用户协作。
-- **只读为主**：单据状态机、库存流水是种子数据。写接口只有用户管理
-  （新增/编辑/重置密码），因为原版后端也只实现了这些。
+- **已支持完整写入**（P0~P2）：备件/仓库/基地/供应商/客户的主数据 CRUD，
+  五类单据（入库/出库/质检/盘点/配送）建单与明细行编辑，状态推进与**库存过账**。
+  权限按「角色白名单 且 菜单」双重判定，数据范围三层隔离，过账带 `posted_at` 幂等保护。
+- **原版后端仍只读**：`backend/src/server.js` 尚未加写路由，需按架构方案第 9 节实施。
 - **无鉴权防护**：token 存在 `localStorage`，密码哈希无盐。真实系统需换
   bcrypt + JWT + 登录限流。
 - **无分页**：列表硬编码 `limit 100`。
