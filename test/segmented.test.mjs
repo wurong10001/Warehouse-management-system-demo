@@ -226,6 +226,43 @@ await check('顶栏基地切换使用 pills 变体', async () => {
   assert.ok(pills.querySelector('.seg-thumb'), 'pills 也应有胶囊')
 })
 
+// ── 7. 移动端不能换行（回归防护）──────────────────────────────────────
+console.log('\n移动端布局防回归')
+await check('全局样式中没有给 .segmented 加 flex-wrap', () => {
+  const css = readFileSync(path.join(demoRoot, 'src', 'styles', 'app.css'), 'utf8')
+  // 曾经为了适配移动端写过 `.segmented { flex-wrap: wrap; }`，
+  // 但胶囊靠 offsetLeft 单行定位，换行后必然错位 —— 禁止再出现。
+  assert.ok(
+    !/\.segmented\s*\{[^}]*flex-wrap\s*:\s*wrap/.test(css),
+    '.segmented 不应出现 flex-wrap: wrap'
+  )
+})
+
+await check('组件自身声明 nowrap + 横向滚动', () => {
+  const src = readFileSync(
+    path.join(demoRoot, 'src', 'components', 'SegmentedControl.vue'),
+    'utf8'
+  )
+  assert.match(src, /flex-wrap:\s*nowrap/)
+  assert.match(src, /overflow-x:\s*auto/)
+})
+
+await check('按钮不被压缩（flex: 0 0 auto）', () => {
+  const src = readFileSync(
+    path.join(demoRoot, 'src', 'components', 'SegmentedControl.vue'),
+    'utf8'
+  )
+  assert.match(src, /\.segmented button\s*\{[^}]*flex:\s*0 0 auto/)
+})
+
+await check('切换选项后会把胶囊滚入可视区', () => {
+  const src = readFileSync(
+    path.join(demoRoot, 'src', 'components', 'SegmentedControl.vue'),
+    'utf8'
+  )
+  assert.match(src, /scrollIntoView/)
+})
+
 console.log(`\n${'─'.repeat(52)}`)
 console.log(`通过 ${passed} 项，失败 ${failed} 项`)
 app.unmount()

@@ -214,8 +214,10 @@ await test('看板返回 metrics/todos/alerts/trend/bases', async () => {
   assert.ok(Array.isArray(d.alerts))
   assert.ok(Array.isArray(d.trend))
   assert.ok(d.bases.length >= 1)
-  // root 未绑定基地 → base_name 为 null（与原后端一致），顶部显示「全部基地」
-  assert.equal(d.base_name, null)
+  // 状态条口径必须与实际过滤口径一致：
+  // 此处设置了 wms_base=1，所以应显示「华东基地」而不是「全部基地」
+  // （曾经这里只按 user.base_id 判定，导致切基地后口径不一致）
+  assert.equal(d.base_name, '华东基地')
 
   // 而绑定基地的账号应返回自己的基地名
   store.clear()

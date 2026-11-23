@@ -49,13 +49,32 @@ function measure() {
 async function measureThenAnimate() {
   await nextTick()
   measure()
+  scrollActiveIntoView()
   // 下一帧再放开过渡，确保首帧是「无动画定位」
   requestAnimationFrame(() => { instant.value = false })
+}
+
+/**
+ * 选项较多时容器可横向滚动，切换选中项后要保证胶囊在可视区域内。
+ * 用 scrollIntoView 的 inline:'nearest'，避免整页纵向跳动。
+ */
+function scrollActiveIntoView() {
+  const container = root.value
+  if (!container) return
+  const idx = props.options.findIndex((o) => o.value === props.modelValue)
+  const btn = btnRefs.value.filter(Boolean)[idx]
+  if (!btn) return
+  try {
+    btn.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+  } catch {
+    /* 老浏览器或不支持平滑滚动时忽略 */
+  }
 }
 
 onMounted(async () => {
   await nextTick()
   measure()
+  scrollActiveIntoView()
   requestAnimationFrame(() => { instant.value = false })
 
   if (typeof ResizeObserver !== 'undefined' && root.value) {
@@ -115,7 +134,23 @@ function select(value) {
   position: relative;
   /* 让胶囊的 inset 计算有参照 */
   isolation: isolate;
+
+  /* ⚠️ 必须保持单行：
+     胶囊靠绝对定位 + offsetLeft 定位，一旦换行，
+     第二行的按钮与胶囊坐标就对不上，表现为胶囊错位/溢出。
+     选项较多时用横向滚动，而不是换行。 */
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  /* 滚动时留出内边距，避免首尾按钮贴边 */
+  scroll-padding-inline: 4px;
 }
+.segmented::-webkit-scrollbar { display: none; }
+/* 按钮不允许被压缩，否则文字会被压成竖排 */
+.segmented button { flex: 0 0 auto; }
 
 /* 胶囊：绝对定位，靠 transform 移动 —— 只动合成层，不触发布局 */
 .seg-thumb {

@@ -693,37 +693,37 @@ export function dashboard({ token, baseId }) {
   const todos = [
     ...db.doc_in.filter((d) => ['draft', 'pending_qc', 'qc_ing', 'pending_shelf'].includes(d.status) && inScope(d, 'base_id', 'warehouse_id'))
       .sort(byDesc('created_at')).slice(0, 8)
-      .map((d) => ({ kind: 'inbound', no: d.no, title: `入库 · ${d.ref_no || d.from_src}`, status: d.status })),
+      .map((d) => ({ kind: 'inbound', no: d.no, title: `入库 · ${d.ref_no || d.from_src}`, status: d.status, created_at: d.created_at })),
     ...db.doc_out.filter((d) => ['pending_review', 'pending_pick', 'pending_check'].includes(d.status) && inScope(d, 'base_id', 'warehouse_id'))
       .sort(byDesc('created_at')).slice(0, 8)
-      .map((d) => ({ kind: 'outbound', no: d.no, title: `出库 · ${d.dept_name || d.type}`, status: d.status })),
+      .map((d) => ({ kind: 'outbound', no: d.no, title: `出库 · ${d.dept_name || d.type}`, status: d.status, created_at: d.created_at })),
     ...db.quality.filter((t) => ['pending_qc', 'qc_ing'].includes(t.status) && inScope(t, 'base_id', 'warehouse_id'))
       .sort(byDesc('created_at')).slice(0, 8)
-      .map((t) => ({ kind: 'quality', no: t.no, title: `质检 · ${t.total} 件`, status: t.status })),
+      .map((t) => ({ kind: 'quality', no: t.no, title: `质检 · ${t.total} 件`, status: t.status, created_at: t.created_at })),
     ...db.stocktake.filter((t) => ['pending_count', 'counting', 'pending_review'].includes(t.status) && inScope(t, 'base_id', 'warehouse_id'))
       .sort(byDesc('created_at')).slice(0, 8)
-      .map((t) => ({ kind: 'stocktake', no: t.no, title: `盘点 · ${t.scope}`, status: t.status })),
+      .map((t) => ({ kind: 'stocktake', no: t.no, title: `盘点 · ${t.scope}`, status: t.status, created_at: t.created_at })),
     ...db.delivery.filter((t) => ['pending_review', 'pending_ship', 'in_transit'].includes(t.status) && inScope(t, 'from_base_id', 'from_wh_id'))
       .sort(byDesc('created_at')).slice(0, 8)
-      .map((t) => ({ kind: 'delivery', no: t.no, title: `配送 · ${t.to_dept || '基地间'}`, status: t.status }))
+      .map((t) => ({ kind: 'delivery', no: t.no, title: `配送 · ${t.to_dept || '基地间'}`, status: t.status, created_at: t.created_at }))
   ]
 
   // 异常单据（原版此查询漏了范围过滤，这里补上，避免跨基地泄漏）
   const alerts = []
   for (const dv of db.delivery) {
     if (dv.status === 'exception' && inScope(dv, 'from_base_id', 'from_wh_id')) {
-      alerts.push({ title: '配送异常', no: dv.no, reason: '配送超时' })
+      alerts.push({ title: '配送异常', no: dv.no, reason: '配送超时', kind: 'delivery', id: dv.id })
     }
   }
   for (const t of db.quality) {
     if (t.fail_qty > 0 && inScope(t, 'base_id', 'warehouse_id')) {
-      alerts.push({ title: '质检不合格', no: t.no, reason: `${t.fail_qty} 件不合格` })
+      alerts.push({ title: '质检不合格', no: t.no, reason: `${t.fail_qty} 件不合格`, kind: 'quality', id: t.id })
     }
   }
   for (const t of db.stocktake) {
     if (t.status !== 'pending_review' || !inScope(t, 'base_id', 'warehouse_id')) continue
     const diff = db.stocktake_item.filter((i) => i.doc_id === t.id).reduce((s, i) => s + (i.diff || 0), 0)
-    alerts.push({ title: '盘点差异待审批', no: t.no, reason: `差异 ${diff} 件` })
+    alerts.push({ title: '盘点差异待审批', no: t.no, reason: `差异 ${diff} 件`, kind: 'stocktake', id: t.id })
   }
 
   // 近 7 天出入库趋势
@@ -749,7 +749,16 @@ export function dashboard({ token, baseId }) {
       qty: db.inventory.filter((i) => i.base_id === b.id).reduce((s, i) => s + i.avail_qty, 0)
     }))
 
-  const baseName = user.base_id ? (db.base.find((b) => b.id === user.base_id)?.name ?? null) : null
+  // 状态条显示的基地口径要与实际过滤口径一致：
+  //   用户绑定基地 → 该基地名
+  //   否则跟随顶栏 X-Base-Id → 该基地名
+  //   都没有 → null（前端显示「全部基地」）
+  // 曾经这里只处理 user.base_id，导致总部账号切换顶栏后，
+  // 数据已按选中基地过滤，但状态条仍显示「全部基地」——口径不一致。
+  const effectiveBaseId = user.base_id || baseScope || null
+  const baseName = effectiveBaseId
+    ? (db.base.find((b) => b.id === effectiveBaseId)?.name ?? null)
+    : null
 
   return { metrics, todos, alerts, trend, bases, base_name: baseName }
 }
