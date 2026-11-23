@@ -847,9 +847,39 @@ function pickFields(fields, body) {
 }
 
 /** 写入明细行（逐行分配 id） */
-function insertItems(db, schema, docId, items) {
+/**
+ * 明细外键校验：postgres 有 FK 兜底，浏览器版必须自己查。
+ *
+ * 两个容易漏掉的点：
+ *   1. part_id 必须存在 —— 否则详情页会显示 undefined，库存永远配不上
+ *   2. location_id 必须属于**本单据的仓库** —— 仅校验"库位存在"不够，
+ *      把仓库 3 的库位填进仓库 1 的单据会造成跨仓上架，账实直接错位
+ */
+function assertItemRefs(db, schema, row, headerRow) {
+  if (row.part_id != null) {
+    const part = db.part.find((p) => p.id === Number(row.part_id))
+    if (!part) throw new ApiError(400, `备件不存在（id=${row.part_id}）`)
+  }
+
+  if (row.location_id != null) {
+    const loc = db.location.find((l) => l.id === Number(row.location_id))
+    if (!loc) throw new ApiError(400, `库位不存在（id=${row.location_id}）`)
+    // 库位必须落在单据所属仓库内
+    const whId = headerRow?.warehouse_id ?? headerRow?.from_wh_id ?? null
+    if (whId != null && loc.warehouse_id !== whId) {
+      throw new ApiError(400, `库位 ${loc.code} 不属于本单据的仓库`)
+    }
+    // 库位类型必须是 bin（库区/货架不能直接放货）
+    if (loc.type !== 'bin') {
+      throw new ApiError(400, `库位 ${loc.code} 不是可存放的库位（类型为 ${loc.type}）`)
+    }
+  }
+}
+
+function insertItems(db, schema, docId, items, headerRow) {
   for (const raw of items || []) {
     const row = pickFields(schema.items, raw)
+    assertItemRefs(db, schema, row, headerRow)
     row.id = nextId(db, schema.itemTable)
     row.doc_id = docId
     // 派生字段：盘点差异自动计算，不信任前端
@@ -948,7 +978,7 @@ export function create(kind, body, { token, baseId } = {}) {
 
     db[schema.table].push(row)
     if (schema.itemTable) {
-      insertItems(db, schema, row.id, body.items)
+      insertItems(db, schema, row.id, body.items, row)
       recomputeHeaderTotals(db, kind, row)
     }
 
@@ -982,7 +1012,7 @@ export function update(kind, id, body, { token, baseId } = {}) {
       // 明细采用「全量替换」语义：传了 items 才重写
       if (Array.isArray(body.items)) {
         db[schema.itemTable] = db[schema.itemTable].filter((i) => i.doc_id !== row.id)
-        insertItems(db, schema, row.id, body.items)
+        insertItems(db, schema, row.id, body.items, row)
       }
       recomputeHeaderTotals(db, kind, row)
     }

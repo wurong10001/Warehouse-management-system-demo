@@ -245,17 +245,67 @@ await test('总部 root 无绑定时，受顶栏基地上下文约束', async ()
 section('事务：失败整体回滚')
 // ══════════════════════════════════════════════════════════════════════
 
-await test('明细含非法 part_id → 整单不落库（头表也无新增）', async () => {
+await test('空明细 → 400 且整单不落库', async () => {
   await as('root')
   const beforeDocs = getDb().doc_in.length
   const beforeItems = getDb().doc_in_item.length
-  // part_id 99999 不存在：当前实现不校验外键，但空明细会被 validate 拦住
   await assert.rejects(
     () => api.create('inbound', { base_id: 1, warehouse_id: 1, from_src: 'purchase', items: [] }),
     /至少需要一行明细/
   )
   assert.equal(getDb().doc_in.length, beforeDocs)
   assert.equal(getDb().doc_in_item.length, beforeItems)
+})
+
+await test('明细 part_id 不存在 → 400 且整单不落库', async () => {
+  await as('root')
+  const beforeDocs = getDb().doc_in.length
+  await assert.rejects(
+    () => api.create('inbound', {
+      base_id: 1, warehouse_id: 1, from_src: 'purchase',
+      items: [{ part_id: 9999, expect_qty: 3 }]
+    }),
+    /备件不存在/
+  )
+  assert.equal(getDb().doc_in.length, beforeDocs, '失败后头表不应新增')
+  assert.ok(!getDb().doc_in_item.some((i) => i.part_id === 9999), '明细不应落库')
+})
+
+await test('明细库位不属于本单据仓库 → 400（跨仓上架拦截）', async () => {
+  await as('root')
+  const beforeDocs = getDb().doc_in.length
+  // 库位 3111 属于仓库 3，单据仓库是 1
+  assert.equal(getDb().location.find((l) => l.id === 3111).warehouse_id, 3)
+  await assert.rejects(
+    () => api.create('inbound', {
+      base_id: 1, warehouse_id: 1, from_src: 'purchase',
+      items: [{ part_id: 1, expect_qty: 5, received_qty: 5, location_id: 3111 }]
+    }),
+    /不属于本单据的仓库/
+  )
+  assert.equal(getDb().doc_in.length, beforeDocs)
+})
+
+await test('明细库位类型必须是 bin（货架/库区不能直接放货）', async () => {
+  await as('root')
+  // 1111 是 bin，111 是 shelf
+  assert.equal(getDb().location.find((l) => l.id === 111).type, 'shelf')
+  await assert.rejects(
+    () => api.create('inbound', {
+      base_id: 1, warehouse_id: 1, from_src: 'purchase',
+      items: [{ part_id: 1, expect_qty: 1, location_id: 111 }]
+    }),
+    /不是可存放的库位/
+  )
+})
+
+await test('合法库位可以正常建单', async () => {
+  await as('root')
+  const out = await api.create('inbound', {
+    base_id: 1, warehouse_id: 1, from_src: 'purchase',
+    items: [{ part_id: 1, expect_qty: 2, received_qty: 2, location_id: 1111 }]
+  })
+  assert.ok(out.id > 0)
 })
 
 await test('事务内抛错后，内存与磁盘都回滚到快照', async () => {
