@@ -17,7 +17,8 @@
     "test:write": "node test/write.test.mjs",
     "test:governance": "node test/governance.test.mjs",
     "test:scope": "node test/dashboard-scope.test.mjs",
-    "test:drill": "node test/drill-down.test.mjs"
+    "test:drill": "node test/drill-down.test.mjs",
+    "check:sync": "node scripts/check-sync.mjs"
   },
   "keywords": [
     "wms",

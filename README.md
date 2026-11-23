@@ -30,6 +30,7 @@ npm run dev          # → http://127.0.0.1:5173
 | `a01` | 会计 | 只读审计视角 |
 | `c01` | 采购员 | 华东 |
 | `s01` | 审计员 | 全菜单只读 |
+| `chief` | **总管** | 全部仓库数据 · 不能管理账号 |
 | `boss` | **老板** | 全部仓库 · 审批仓库增删 |
 
 > 数据改动会存进浏览器 `localStorage`。登录页底部有「重置演示数据」，
@@ -337,7 +338,24 @@ src/config/entity-schema.js   ← 字段定义 / 校验规则 / 权限白名单 
 事务回滚、单号递增、状态机合法性、过账幂等、库存不足整单回滚、
 配送三段式在途库存（含部分签收与重复签收幂等）。
 
-**10. 顺手修掉原版的几个问题**
+**10. 两版行为对齐**
+
+关键配置（`entity-schema.js`：字段/校验/权限/状态机）两版共用一份，靠
+`npm run check:sync` 做内容哈希比对，防止手工复制时漂移。
+
+后端侧实现对应关系：
+
+| 能力 | 静态版 | 后端版 |
+|---|---|---|
+| 多仓授权 | `allowedWarehouses()` | `loadUser()` 返回 `warehouses` + `scopeSql()` 拼 IN |
+| 仓库审批 | `sys_approval` 内存表 | `write/governance.js`（行锁 + 二次校验） |
+| 站内消息 | `pushMessage()` | `write/messages.js`（同一套收件人规则） |
+| 库存过账 | `posted_at` 幂等 | 同左 |
+
+后端测试 62 项（write 19 / scope 14 / approval 18 / messages 11），
+均在真实 PostgreSQL 上运行。
+
+**11. 顺手修掉原版的几个问题**
 
 | 原版问题 | 静态版处理 |
 |---|---|
@@ -374,8 +392,9 @@ E2E 测试用 Vite 把整个应用打成 bundle 后在 jsdom 里挂载，断言
 - **配送采用三段式在途库存**：发运时起运仓可用→在途，签收时在途→目的仓，
   部分签收的差额继续留在在途。`delivery_item` 无 `batch` 字段，
   因此跨批次汇总扣减。
-- **原版后端已同步实现**：`backend/src/write/` 提供同一套语义的 SQL 版本，
-  含 `sql/05_write_support.sql` 迁移（`posted_at`、配送双段标记、表达式唯一索引）。
+- **原版后端已同步实现**：`backend/src/write/` 提供同一套语义的 SQL 版本
+  （多仓授权、审批流、消息系统均已对齐），迁移见 `sql/05`、`sql/06`。
+  两版共享同一份 `entity-schema.js`，可用 `npm run check:sync` 校验一致性。
 - **无鉴权防护**：token 存在 `localStorage`，密码哈希无盐。真实系统需换
   bcrypt + JWT + 登录限流。
 - **无分页**：列表硬编码 `limit 100`。
