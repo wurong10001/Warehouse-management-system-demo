@@ -345,8 +345,12 @@ const canSaveThis = computed(() => canWrite(auth.user, props.kind))
 }
 .del:active { background: var(--heat-bg); color: var(--heat); }
 
-.pop-enter-active { transition: opacity 0.32s var(--ease-spring), transform 0.32s var(--ease-spring); }
-.pop-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+/* 实色白面板弹窗：不套玻璃模糊（玻璃只用于真正的层叠处），
+   但遵守空间一致性——从中心浮现，进出同路径，缓动统一走 token。 */
+.pop-enter-active, .pop-leave-active {
+  transition: opacity 0.32s var(--ease-spring), transform 0.32s var(--ease-spring);
+  transform-origin: center center;
+}
 .pop-enter-from, .pop-leave-to { opacity: 0; transform: scale(0.94) translateY(10px); }
 .scrim-enter-active, .scrim-leave-active { transition: opacity 0.22s; }
 .scrim-enter-from, .scrim-leave-to { opacity: 0; }

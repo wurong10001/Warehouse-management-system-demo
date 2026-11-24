@@ -7,7 +7,7 @@ const props = defineProps({ open: Boolean, title: String })
 const emit = defineEmits(['close'])
 const isMobile = useMobile()
 const sheetRef = ref(null)
-const { dy, dragging, onStart, onMove, onEnd, reset } = useDragDismiss(() => sheetRef.value, () => emit('close'))
+const { dy, dragging, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, reset } = useDragDismiss(() => sheetRef.value, () => emit('close'))
 watch(() => props.open, (v) => { if (v) reset() })
 
 const sheetStyle = computed(() => {
@@ -28,9 +28,10 @@ const scrimStyle = computed(() => {
       <div
         v-if="isMobile"
         class="grab-area"
-        @touchstart="onStart"
-        @touchmove.prevent="onMove"
-        @touchend="onEnd"
+        @pointerdown.prevent="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerCancel"
       ><div class="grab"></div></div>
       <header class="dhead">
         <h3>{{ title }}</h3>
@@ -75,17 +76,42 @@ const scrimStyle = computed(() => {
 .close:active { transform: scale(0.94); }
 .dbody { flex: 1; overflow-y: auto; padding: 0 22px 28px; }
 
-.slide-enter-active { transition: transform 0.4s var(--ease-spring); }
-.slide-leave-active { transition: transform 0.28s var(--ease-spring); }
-.slide-enter-from, .slide-leave-to { transform: translateX(100%); }
-.up-enter-active { transition: transform 0.4s var(--ease-spring); }
-.up-leave-active { transition: transform 0.28s var(--ease-spring); }
-.up-enter-from, .up-leave-to { transform: translateY(100%); }
+/* 转场保留原有空间路径（桌面从右、移动从下），并叠加玻璃材质化：
+   backdrop-filter 与 scale/opacity 同步走，材质「抵达」而非单纯「淡入」。
+   transform-origin 锚定到触发侧，符合 motion.md §4 的空间一致性。 */
+.slide-enter-active, .slide-leave-active {
+  transition:
+    transform 0.4s var(--ease-spring),
+    backdrop-filter 0.4s var(--ease-spring),
+    -webkit-backdrop-filter 0.4s var(--ease-spring),
+    opacity 0.4s var(--ease-spring);
+  transform-origin: right center;
+}
+.slide-enter-from, .slide-leave-to {
+  transform: translateX(100%);
+  backdrop-filter: blur(0px) saturate(100%);
+  -webkit-backdrop-filter: blur(0px) saturate(100%);
+  opacity: 0;
+}
+.up-enter-active, .up-leave-active {
+  transition:
+    transform 0.4s var(--ease-spring),
+    backdrop-filter 0.4s var(--ease-spring),
+    -webkit-backdrop-filter 0.4s var(--ease-spring),
+    opacity 0.4s var(--ease-spring);
+  transform-origin: bottom center;
+}
+.up-enter-from, .up-leave-to {
+  transform: translateY(100%);
+  backdrop-filter: blur(0px) saturate(100%);
+  -webkit-backdrop-filter: blur(0px) saturate(100%);
+  opacity: 0;
+}
 .scrim-enter-active, .scrim-leave-active { transition: opacity 0.22s; }
 .scrim-enter-from, .scrim-leave-to { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .slide-enter-active, .slide-leave-active, .up-enter-active, .up-leave-active { transition: opacity 0.2s; }
-  .slide-enter-from, .slide-leave-to, .up-enter-from, .up-leave-to { transform: none; opacity: 0; }
+  .slide-enter-from, .slide-leave-to, .up-enter-from, .up-leave-to { transform: none; opacity: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .drawer { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }

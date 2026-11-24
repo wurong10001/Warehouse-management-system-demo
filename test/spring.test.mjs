@@ -138,6 +138,53 @@ check('分段控件选中态不再叠加 scale 动画', () => {
   if (m) assert.ok(!/animation/.test(m[1]), '选中态不应有 animation')
 })
 
+console.log('\n玻璃材质化（materialize）')
+check('定义了 materialize 转场契约', () => {
+  assert.match(globalCss, /\.materialize-enter-active/)
+  assert.match(globalCss, /\.materialize-leave-active/)
+})
+check('materialize 同步动画 blur + scale + opacity', () => {
+  // 可能有多个同名规则（主定义 + reduced-motion 降级），找含 transition 的那个
+  const blocks = [...globalCss.matchAll(/\.materialize-enter-active[\s\S]*?\{([^}]*)\}/g)]
+  const main = blocks.find((b) => /backdrop-filter/.test(b[1]))
+  assert.ok(main, '缺少 .materialize-enter-active 主定义')
+  assert.match(main[1], /backdrop-filter/)
+  assert.match(main[1], /transform/)
+  assert.match(main[1], /opacity/)
+})
+check('materialize 起点含 scale 与 blur(0)', () => {
+  // 跳过 reduced-motion 降级块（其中 transform: none），找主定义
+  const blocks = [...globalCss.matchAll(/\.materialize-enter-from[^{]*\{([^}]*)\}/g)]
+  const main = blocks.find((b) => /scale\(/.test(b[1]))
+  assert.ok(main, '缺少 .materialize-enter-from 主定义')
+  assert.match(main[1], /scale\(var\(--materialize-scale\)\)/)
+  assert.match(main[1], /blur\(0px\)/)
+})
+check('新增 materialize token 已声明', () => {
+  assert.match(globalCss, /--materialize-scale:/)
+  assert.match(globalCss, /--materialize-travel:/)
+  assert.match(globalCss, /--glass-blur:/)
+})
+
+console.log('\n可访问性三信号（全局兜底）')
+check('prefers-reduced-transparency 提升为全局兜底', () => {
+  const m = globalCss.match(/@media \(prefers-reduced-transparency: reduce\)\s*\{([\s\S]*?)\}/)
+  assert.ok(m, 'app.css 缺少 prefers-reduced-transparency 全局块')
+  assert.match(m[1], /\.glass-nav/)
+  assert.match(m[1], /backdrop-filter:\s*none/)
+})
+check('prefers-contrast: more 全局兜底存在', () => {
+  const m = globalCss.match(/@media \(prefers-contrast: more\)\s*\{([\s\S]*?)\}/)
+  assert.ok(m, 'app.css 缺少 prefers-contrast 全局块')
+  assert.match(m[1], /\.glass-nav/)
+  assert.match(m[1], /border:/)
+})
+check('reduced-motion 下 materialize 退化为纯淡入', () => {
+  const block = globalCss.slice(globalCss.indexOf('@media (prefers-reduced-motion: reduce)'))
+  assert.match(block, /\.materialize-enter-active/)
+  assert.match(block, /opacity 200ms/)
+})
+
 console.log(`\n${'─'.repeat(52)}`)
 console.log(`通过 ${passed} 项，失败 ${failed} 项`)
 app.unmount()

@@ -112,4 +112,12 @@ body {
   /* 按压缩放：命中目标越小，收缩越明显才越有「按到」的实感 */
   --press-scale-sm: 0.93;  /* 药丸 / 标签 / 选项 */
   --press-scale-md: 0.96;  /* 按钮 */
+
+  /* ── Materialize（玻璃材质入场：blur + scale + opacity 同步） ──
+     玻璃不是「淡入的一层色块」，而是「作为材质抵达」：
+     模糊、缩放、透明度一起走，读起来才有实体感（见 motion.md §5）。 */
+  --glass-blur: 20px;              /* 成品玻璃的模糊半径（与 .glass-nav 一致） */
+  --glass-saturate: 180%;          /* 提饱和度，玻璃边缘才有 Apple 的通透感 */
+  --materialize-scale: 0.98;       /* 入场起点缩放：轻微，不夸张 */
+  --materialize-travel: 12px;      /* 入场起点位移（沿弹出方向，组件里用 translateY/X） */
 }

@@ -14,7 +14,7 @@ const route = useRoute()
 const scrolled = ref(false)
 const sheet = ref(false)
 const sheetRef = ref(null)
-const { dy, dragging, onStart, onMove, onEnd, reset } = useDragDismiss(() => sheetRef.value, () => { sheet.value = false })
+const { dy, dragging, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, reset } = useDragDismiss(() => sheetRef.value, () => { sheet.value = false })
 watch(sheet, (v) => { if (v) reset() })
 
 const sheetStyle = computed(() => (dy.value ? { transform: `translateY(${dy.value}px)` } : null))
@@ -188,7 +188,7 @@ async function logout() {
     <Transition name="scrim"><div v-if="sheet" class="scrim" :style="scrimStyle" @click="sheet = false"></div></Transition>
     <Transition name="sheet">
       <div v-if="sheet" ref="sheetRef" class="sheet" :class="{ dragging }" :style="sheetStyle" role="dialog" aria-label="更多功能">
-        <div class="grab-area" @touchstart="onStart" @touchmove.prevent="onMove" @touchend="onEnd">
+        <div class="grab-area" @pointerdown.prevent="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerCancel">
           <div class="grab"></div>
         </div>
         <div class="sheet-base">
@@ -328,15 +328,27 @@ async function logout() {
   .base-pick::-webkit-scrollbar { display: none; }
 }
 
-.sheet-enter-active { transition: transform 0.4s var(--ease-spring); }
-.sheet-leave-active { transition: transform 0.28s var(--ease-spring); }
-.sheet-enter-from, .sheet-leave-to { transform: translateY(100%); }
+/* 移动端玻璃 sheet：从底部浮现，blur + scale + opacity 同步，材质「抵达」 */
+.sheet-enter-active, .sheet-leave-active {
+  transition:
+    transform 0.4s var(--ease-spring),
+    backdrop-filter 0.4s var(--ease-spring),
+    -webkit-backdrop-filter 0.4s var(--ease-spring),
+    opacity 0.4s var(--ease-spring);
+  transform-origin: bottom center;
+}
+.sheet-enter-from, .sheet-leave-to {
+  transform: translateY(100%) scale(var(--materialize-scale));
+  backdrop-filter: blur(0px) saturate(100%);
+  -webkit-backdrop-filter: blur(0px) saturate(100%);
+  opacity: 0;
+}
 .scrim-enter-active, .scrim-leave-active { transition: opacity 0.22s; }
 .scrim-enter-from, .scrim-leave-to { opacity: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   .sheet-enter-active, .sheet-leave-active { transition: opacity 0.2s; }
-  .sheet-enter-from, .sheet-leave-to { transform: none; opacity: 0; }
+  .sheet-enter-from, .sheet-leave-to { transform: none; opacity: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .tabbar, .sheet { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }

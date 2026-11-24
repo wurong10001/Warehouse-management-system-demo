@@ -346,8 +346,61 @@ a { color: var(--accent-link); text-decoration: none; }
 .list-row:last-child { border-bottom: none; }
 .list-row:hover { background: var(--hover); }
 
+/* ── Materialize 转场（玻璃材质入场：blur + scale + opacity 同步） ──
+   玻璃不是「淡入的一层色块」，而是「作为材质抵达」。任何玻璃遮罩层
+   （抽屉 / 弹窗 / popover）都可套用 `.materialize-*`：入场时模糊与缩放
+   同步发生，scrim 单独淡出（略快，让材质成为主角）。纯色层不必用，
+   保持轻量。见 motion.md §5。 */
+.materialize-enter-active,
+.materialize-leave-active {
+  transition:
+    opacity var(--dur-spring) var(--ease-spring),
+    transform var(--dur-spring) var(--ease-spring),
+    backdrop-filter var(--dur-spring) var(--ease-spring),
+    -webkit-backdrop-filter var(--dur-spring) var(--ease-spring);
+  transform-origin: var(--materialize-origin, center);
+}
+.materialize-enter-from,
+.materialize-leave-to {
+  opacity: 0;
+  transform: translateY(var(--materialize-travel)) scale(var(--materialize-scale));
+  backdrop-filter: blur(0px) saturate(100%);
+  -webkit-backdrop-filter: blur(0px) saturate(100%);
+}
+
+/* ── 可访问性三信号（全局兜底，组件内特例可覆盖） ── */
+/* 1) 减少动态效果：跨fade，不做位移/缩放（精细降级见上方药丸区块） */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .materialize-enter-active,
+  .materialize-leave-active {
+    transition: opacity 200ms ease !important;
+  }
+  .materialize-enter-from,
+  .materialize-leave-to {
+    transform: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+/* 2) 减少透明度：玻璃层退化为实色，避免内容穿透干扰 */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-nav,
+  .glass-chip {
+    background: var(--surface) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: var(--sh-card);
+  }
+}
+/* 3) 增强对比度：玻璃层补实边，保证边界可辨 */
+@media (prefers-contrast: more) {
+  .glass-nav,
+  .glass-chip {
+    background: var(--surface) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: 1px solid rgba(0, 0, 0, 0.35);
+  }
 }
 
 /* ── 手机端（≤820px）：列表堆叠行 ── */
